@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["impedance_tools"]
+
+[project]
+name = "impedance-tools"
+version = "0.0.0"
