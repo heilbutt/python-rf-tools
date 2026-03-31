@@ -1,4 +1,4 @@
-from scipy.constants import foot, mile ,inch
+from scipy.constants import foot, mile, inch
 
 FREQUENCY_UNITS: dict[str, float] = {
     'Hz' : 1e0,

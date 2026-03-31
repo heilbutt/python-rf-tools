@@ -1,61 +1,137 @@
-# necessary to type hinting class instance within itself for python<3.14
-from __future__ import annotations
-
 import numpy as np
 
+from typing import Iterable, Any
 from numpy.typing import NDArray
 
 
-class Impedance:
-
-    def __init__(
-        self,
-        f: NDArray,
-        Z: NDArray
-    ) -> None:
-
-        if not np.isrealobj(f):
-            raise ValueError('Frequency values must be real-valued')
-
-        if not np.iscomplexobj(Z):
-            raise ValueError('Impedance values must be complex-valued')
-        
-        self.f = f
-        self.Z = Z
+class FrequencyMismatchError(Exception):
+    pass
 
 
-    def __add__(self, other: Impedance) -> Impedance:
-        if not np.allclose(self.f, other.f):
-            raise ValueError('Frequencies do not match for impedance addition')
-        return Impedance(self.f, self.Z + other.Z)
+class UnequalSampleCountError(Exception):
+    pass
+
+
+class Spectrum:
+
+    def __init__(self, f: Iterable[float], z: Iterable[complex]) -> None:
+
+        self._f = np.asarray(f, dtype=float)
+        self._z = np.asarray(z, dtype=complex)
+
+        if len(self._f) != len(self._z):
+            raise UnequalSampleCountError(f'Frequency and value have unequal number of samples! (f: `{len(self._f)}`, y: `{len(self._z)}`)')
+
+    @property
+    def n(self) -> int:
+        return len(self._f)
     
+    @property
+    def f(self) -> NDArray[np.floating[Any]]:
+        return self._f
 
-    def __radd__(self, other: Impedance | int) -> Impedance:
-        if other == 0:
-            return self
-        elif isinstance(other, Impedance):
-            return self.__add__(other)
-        else:
-            raise TypeError('Unsupported type for addition with Impedance')
+    @f.setter
+    def f(self, new_values: Iterable[float]) -> None:
+        new_values = np.asarray(new_values, dtype=float)
+        if not self.n == len(new_values):
+            raise UnequalSampleCountError(f'Changing number of frequency samples is not supported (current samples: `{self.n}`, new samples: `{len(new_values)}`). Create a new object instead')
+        self._f = new_values
 
+    @property
+    def z(self) -> NDArray[np.complexfloating[Any]]:
+        return self._z
 
-    def __sub__(self, other: Impedance) -> Impedance:
-        if not np.allclose(self.f, other.f):
-            raise ValueError('Frequencies do not match for impedance subtraction')
-        return Impedance(self.f, self.Z - other.Z)
+    @z.setter
+    def z(self, new_values: Iterable[complex]) -> None:
+        new_values = np.asarray(new_values, dtype=complex)
+        if not self.n == len(new_values):
+            raise UnequalSampleCountError(f'Changing number of spectrum samples is not supported (current samples: `{self.n}`, new samples: `{len(new_values)}`). Create a new object instead')
+        self._z = new_values
 
-
-    def __mul__(self, scalar: float) -> Impedance:
-        return Impedance(self.f, scalar * self.Z)
+    @property
+    def real(self) -> NDArray[np.floating[Any]]:
+        return np.real(self._z)
     
-
-    def __rmul__(self, scalar: float) -> Impedance:
-        return self * scalar
+    @real.setter
+    def real(self, new_values: Iterable[float]) -> None:
+        new_values = np.asarray(new_values, dtype=float)
+        if not self.n == len(new_values):
+            raise UnequalSampleCountError(f'Changing number of spectrum samples is not supported (current samples: `{self.n}`, new samples: `{len(new_values)}`). Create a new object instead')
+        self._z = new_values + 1j*np.imag(self._z)
     
-
-    def __truediv__(self, scalar: float) -> Impedance:
-        return Impedance(self.f, self.Z / scalar)
+    @property
+    def imag(self) -> NDArray[np.floating[Any]]:
+        return np.imag(self._z)
     
+    @imag.setter
+    def imag(self, new_values: Iterable[float]) -> None:
+        new_values = np.asarray(new_values, dtype=float)
+        if not self.n == len(new_values):
+            raise UnequalSampleCountError(f'Changing number of spectrum samples is not supported (current samples: `{self.n}`, new samples: `{len(new_values)}`). Create a new object instead')
+        self._z = np.real(self._z) + 1j*new_values
+    
+    @property
+    def mag(self) -> NDArray[np.floating[Any]]:
+        return np.abs(self._z)
+    
+    @mag.setter
+    def mag(self, new_values: Iterable[float]) -> None:
+        new_values = np.asarray(new_values, dtype=float)
+        if not self.n == len(new_values):
+            raise UnequalSampleCountError(f'Changing number of spectrum samples is not supported (current samples: `{self.n}`, new samples: `{len(new_values)}`). Create a new object instead')
+        self._z = np.abs(new_values) * np.exp(1j*np.angle(self._z))
+    
+    @property
+    def phase(self) -> NDArray[np.floating[Any]]:
+        return np.angle(self._z)
+    
+    @phase.setter
+    def phase(self, new_values: Iterable[float]) -> None:
+        new_values = np.asarray(new_values, dtype=float)
+        if not self.n == len(new_values):
+            raise UnequalSampleCountError(f'Changing number of spectrum samples is not supported (current samples: `{self.n}`, new samples: `{len(new_values)}`). Create a new object instead')
+        self._z = np.abs(self._z) * np.exp(1j*new_values)
+
+    def __neg__(self) -> Spectrum:
+        return type(self)(self._f, -self._z)
+
+    def __add__(self, other: Spectrum | complex) -> Spectrum :
+        if isinstance(other, Spectrum):
+            if not np.allclose(self._f, other._f):
+                raise FrequencyMismatchError('Frequencies do not match for spectrum addition')
+            return type(self)(self._f, self._z + other._z)
+        if isinstance(other, (int, float, complex)):
+            return type(self)(self._f, self._z + other)
+        return NotImplemented
+
+    def __radd__(self, other: Spectrum | complex) -> Spectrum:
+        return self + other
+
+    def __sub__(self, other: Spectrum | complex) -> Spectrum:
+        if isinstance(other, Spectrum):
+            if not np.allclose(self._f, other._f):
+                raise FrequencyMismatchError('Frequencies do not match for spectrum subtraction')
+            return type(self)(self._f, self._z - other._z)
+        if isinstance(other, (int, float, complex)):
+            return type(self)(self._f, self._z - other)
+        return NotImplemented
+    
+    def __rsub__(self, other: Spectrum | complex) -> Spectrum:
+        return -self + other
+
+    def __mul__(self, other: complex) -> Spectrum:
+        if isinstance(other, (int, float, complex)):
+            return type(self)(self._f, other * self._z)
+        return NotImplemented
+
+    def __rmul__(self, other: complex) -> Spectrum:
+        return self * other
+    
+    def __truediv__(self, other: complex) -> Spectrum:
+        if isinstance(other, (int, float, complex)):
+            return type(self)(self._f, self._z / other)
+        return NotImplemented
+
 
 #     @classmethod
 #     def from_wake(

@@ -3,7 +3,7 @@ import re
 import numpy as np
 
 from .units import FREQUENCY_UNITS
-from .quantities import Impedance
+from .quantities import Spectrum
 
 
 class CstAsciiParseError(Exception):
@@ -55,7 +55,7 @@ def _parameters_are_close(
     return True
 
 
-def _get_impedance_from_cst_ascii_lines(lines: list[str]) -> Impedance:
+def _get_impedance_from_cst_ascii_lines(lines: list[str]) -> Spectrum:
     """Parse impedance data from a list of CST ASCII export lines.
     Currently only Re/Im format is supported.
 
@@ -63,7 +63,7 @@ def _get_impedance_from_cst_ascii_lines(lines: list[str]) -> Impedance:
         lines: Lines of text from a CST impedance export ASCII file.
 
     Returns:
-        Impedance object with frequency and complex impedance.
+        Spectrum object with frequency and complex impedance.
 
     Raises:
         CstAsciiParseError: When frequency unit or data format is invalid.
@@ -92,7 +92,7 @@ def _get_impedance_from_cst_ascii_lines(lines: list[str]) -> Impedance:
 
     # infer format of impedance from header line
     if re.search(r'(Re \/ Ohm).*(Im \/ Ohm)', header_line):
-        return Impedance(
+        return Spectrum(
             raw[:,0] * frequency_factor, # Hz
             raw[:,1] + 1j * raw[:,2] # Ohm
         )
@@ -100,7 +100,7 @@ def _get_impedance_from_cst_ascii_lines(lines: list[str]) -> Impedance:
         raise CstAsciiParseError(f'Could not determine format, or unknown format in header line `{header_line}`')
     
 
-def get_impedance_from_cst_ascii(filename: Path | str) -> Impedance:
+def get_impedance_from_cst_ascii(filename: Path | str) -> Spectrum:
     """Load a single impedance trace from a CST ASCII file.
     The ASCII file is obtained by selecting an **single** impedance trace in CST and
     using Post-Processing > Import/Export > ASCII.
@@ -110,12 +110,11 @@ def get_impedance_from_cst_ascii(filename: Path | str) -> Impedance:
         filename: Path to a CST ASCII export impedance file.
 
     Returns:
-        Impedance object.
+        Spectrum object.
     """
 
-    if isinstance(filename, (Path, str)):
-        with open(filename) as fp:
-            lines = fp.readlines()
+    with open(filename) as fp:
+        lines = fp.readlines()
 
     return _get_impedance_from_cst_ascii_lines(lines)
 
@@ -123,7 +122,7 @@ def get_impedance_from_cst_ascii(filename: Path | str) -> Impedance:
 def get_all_impedances_from_cst_sweep_ascii(
     filename: Path | str,
     silent: bool = True,
-) -> list[tuple[dict[str, float], Impedance]]:
+) -> list[tuple[dict[str, float], Spectrum]]:
     """Load all impedances from a CST parametric sweep export ASCII file.
     The ASCII is obtained by selecting an **parametric** impedance trace in CST and
     using Post-Processing > Import/Export > ASCII.
@@ -134,7 +133,7 @@ def get_all_impedances_from_cst_sweep_ascii(
         silent: If False, print parsing status.
 
     Returns:
-        List of (parameter dictionary, Impedance object) tuples.
+        List of (parameter dictionary, Spectrum object) tuples.
 
     Raises:
         CstAsciiParseError: If parameter block parsing fails.
@@ -142,7 +141,7 @@ def get_all_impedances_from_cst_sweep_ascii(
 
     parameter_pattern = re.compile(r'#Parameters\s*=\s*\{(.+?)\}')
     
-    impedances: list[tuple[dict[str, float], Impedance]] = []
+    impedances: list[tuple[dict[str, float], Spectrum]] = []
 
     with open(filename) as fp:
         current_parameters: dict[str, float] | None = None
@@ -197,7 +196,7 @@ def get_impedance_from_cst_sweep_ascii(
     filename: Path | str,
     parameter_filter: dict[str, float],
     silent: bool = True,
-) -> Impedance:
+) -> Spectrum:
     """Select an impedance trace matching parameters from a CST parametric sweep file. 
     The ASCII file is obtained by selecting an **parametric** impedance trace in CST and
     using Post-Processing > Import/Export > ASCII.
@@ -210,14 +209,14 @@ def get_impedance_from_cst_sweep_ascii(
         silent: If False, print search status.
 
     Returns:
-        Matching Impedance.
+        Matching Spectrum.
 
     Raises:
         CstAsciiParseError: If parsing fails, if there is no match for `parameter_filter`,
             or if there is *more than one* match for `parameter_filter.`
     """
 
-    all_impedances: list[tuple[dict[str, float], Impedance]] \
+    all_impedances: list[tuple[dict[str, float], Spectrum]] \
         = get_all_impedances_from_cst_sweep_ascii(filename, silent)
 
     # collect already scanned parameter combinations to check for duplicates

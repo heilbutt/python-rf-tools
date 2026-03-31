@@ -5,7 +5,7 @@ from .cst import (
 )
 
 from .quantities import (
-    Impedance
+    Spectrum
 )
 
 from .units import (
@@ -17,7 +17,7 @@ __all__ = [
     'get_impedance_from_cst_ascii',
     'get_impedance_from_cst_sweep_ascii',
     'get_all_impedances_from_cst_sweep_ascii',
-    'Impedance',
+    'Spectrum',
     'FREQUENCY_UNITS',
     'LENGTH_UNITS'
 ]
