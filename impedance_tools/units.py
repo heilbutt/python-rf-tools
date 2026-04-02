@@ -1,19 +1,16 @@
-from scipy.constants import foot, mile, inch
-
-FREQUENCY_UNITS: dict[str, float] = {
-    'Hz' : 1e0,
-    'kHz': 1e3,
-    'MHz': 1e6,
-    'GHz': 1e9,
+PREFIXES: dict[str, float] = {
+    'f' : 1e-15,
+    'p' : 1e-12,
+    'n' : 1e-9,
+    'u' : 1e-6,
+    'm' : 1e-3,
+    ''  : 1e+0,
+    'k' : 1e+3,
+    'M' : 1e+6,
+    'G' : 1e+9,
+    'T' : 1e+12
 }
 
-LENGTH_UNITS: dict[str, float] = {
-    'm'  : 1e0,
-    'cm' : 1e-2,
-    'mm' : 1e-3,
-    'um' : 1e-6,
-    'nm' : 1e-9,
-    'ft' : foot,
-    'mil': mile,
-    'in' : inch
-}
+TIME_UNITS = {key + 's': value for key, value in PREFIXES.items()}
+FREQUENCY_UNITS = {key + 'Hz': value for key, value in PREFIXES.items()}
+LENGTH_UNITS = {key + 'm': value for key, value in PREFIXES.items()}

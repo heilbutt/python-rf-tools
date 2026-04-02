@@ -2,12 +2,18 @@ from pathlib import Path
 import re
 import numpy as np
 
-from .units import FREQUENCY_UNITS
-from .quantities import Spectrum
+from .units import TIME_UNITS, FREQUENCY_UNITS, LENGTH_UNITS
+from .quantities import RealQuantity, ComplexQuantity
+
+from typing import Sequence
 
 
 class CstAsciiParseError(Exception):
-    """Exception raised for errors parsing CST ASCII impedance data."""
+    """Exception raised for errors parsing CST ASCII data."""
+
+
+class CstAsciiUnitParseError(Exception):
+    """Exception raised for errors parsing units in CST ASCII data."""
 
 
 def _is_close(a: float, b: float, rel_tol: float = 1e-09, abs_tol: float = 0.0):
@@ -55,85 +61,95 @@ def _parameters_are_close(
     return True
 
 
-def _get_impedance_from_cst_ascii_lines(lines: list[str]) -> Spectrum:
-    """Parse impedance data from a list of CST ASCII export lines.
-    Currently only Re/Im format is supported.
-
-    Args:
-        lines: Lines of text from a CST impedance export ASCII file.
-
-    Returns:
-        Spectrum object with frequency and complex impedance.
-
-    Raises:
-        CstAsciiParseError: When frequency unit or data format is invalid.
-    """
-
-    # get frequency unit and check export format
-    freq_match = None
-    header_line: str = ''
-    for line in lines:
-        freq_match = re.search('(' + '|'.join(FREQUENCY_UNITS.keys()) + ')', line)
-        if freq_match is not None:
-            header_line = line
-            break
-
-    # no line with frequency unit found
-    if freq_match is None:
-        raise CstAsciiParseError(f'Could not determine frequency unit')
+def _get_quantity_from_cst_ascii_lines(
+    lines: Sequence[str],
+    is_complex: bool = True,
+    convert_x_unit: bool = True,
+    header_line_index: int = 1,
+) -> RealQuantity | ComplexQuantity:
     
-    # parse frequency unit into factor
-    try:    
-        frequency_factor = FREQUENCY_UNITS[freq_match.group(1)]
-    except KeyError:
-        raise CstAsciiParseError(f'Unknown frequency unit: `{freq_match.group(1)}`')
-    
-    raw = np.loadtxt(lines, comments='#')
+    header_line = lines[header_line_index]
 
-    # infer format of impedance from header line
-    if re.search(r'(Re \/ Ohm).*(Im \/ Ohm)', header_line):
-        return Spectrum(
-            raw[:,0] * frequency_factor, # Hz
-            raw[:,1] + 1j * raw[:,2] # Ohm
-        )
+    if convert_x_unit:
+        for unit_dict in [TIME_UNITS, FREQUENCY_UNITS, LENGTH_UNITS]:
+            unit_match = re.search('(' + '|'.join(unit_dict.keys()) + ')', header_line)
+            if unit_match:
+                x_unit_factor = unit_dict[unit_match.group(1)]
+                break
+
+        else:
+            raise CstAsciiUnitParseError(f'Could not determine unit in header line `{header_line}`')
+        
     else:
-        raise CstAsciiParseError(f'Could not determine format, or unknown format in header line `{header_line}`')
+        x_unit_factor = 1
+
+    if is_complex:
+        # Try format Real-imaginary
+        header_match = re.search(r'(\[Re).*(\[Im)', header_line)
+        if header_match:
+            raw = np.loadtxt(lines, comments='#')
+            return ComplexQuantity(
+                raw[:,0] * x_unit_factor,
+                raw[:,1] + 1j * raw[:,2]
+            )
+        
+        # Try format Magnitude-phase
+        header_match = re.search(r'(\[Mag).*(\[Pha)', header_line)
+        if header_match:
+            raw = np.loadtxt(lines, comments='#')
+            return ComplexQuantity(
+                raw[:,0] * x_unit_factor,
+                raw[:,1] * np.exp(1j * raw[:,2])
+            )
+    
+        raise CstAsciiParseError(f'Could not determine complex format. Is this a complex-valued export from CST?')
+    
+    else:
+        raw = np.loadtxt(lines, comments='#')
+        return RealQuantity(
+            raw[:,0] * x_unit_factor,
+            raw[:,1]
+        )
     
 
-def get_impedance_from_cst_ascii(filename: Path | str) -> Spectrum:
-    """Load a single impedance trace from a CST ASCII file.
-    The ASCII file is obtained by selecting an **single** impedance trace in CST and
-    using Post-Processing > Import/Export > ASCII.
-    Currently only Re/Im format is supported.
-
-    Args:
-        filename: Path to a CST ASCII export impedance file.
-
-    Returns:
-        Spectrum object.
-    """
-
+def get_quantity_from_cst_ascii(
+    filename: Path | str,
+    is_complex: bool = True,
+    convert_x_unit: bool = True,
+    header_line_index: int = 1,
+) -> RealQuantity | ComplexQuantity:
+    
     with open(filename) as fp:
         lines = fp.readlines()
+    return _get_quantity_from_cst_ascii_lines(
+        lines=lines,
+        is_complex=is_complex,
+        convert_x_unit=convert_x_unit,
+        header_line_index=header_line_index
+    )
 
-    return _get_impedance_from_cst_ascii_lines(lines)
 
-
-def get_all_impedances_from_cst_sweep_ascii(
+def get_all_quantities_from_cst_sweep_ascii(
     filename: Path | str,
+    is_complex: bool = True,
+    convert_x_unit: bool = True,
+    header_line_index: int = 1,
     silent: bool = True,
-) -> list[tuple[dict[str, float], Spectrum]]:
-    """Load all impedances from a CST parametric sweep export ASCII file.
-    The ASCII is obtained by selecting an **parametric** impedance trace in CST and
+) -> list[tuple[dict[str, float], RealQuantity]] | list[tuple[dict[str, float], ComplexQuantity]]:
+    """Load all quantities from a CST parametric sweep export ASCII file.
+    The ASCII is obtained by selecting an *parametric* impedance trace in CST and
     using Post-Processing > Import/Export > ASCII.
-    Currently only Re/Im format is supported.
     
     Args:
         filename: Path to CST parametric sweep ASCII file.
+        is_complex: Wether the CST quantitiy is real or complex valued.
+        convert_x_unit: If True, will infer X-axis unit from file and convert to base unit.
+        header_line_index: Which line (starting with 0) in a block is the table header.
         silent: If False, print parsing status.
 
     Returns:
-        List of (parameter dictionary, Spectrum object) tuples.
+        List of (parameter dictionary, RealQuantity) tuples if `is_complex` is false,
+        or list of (parameter dictionary, ComplexQuantity) tuples if `is_complex` is true
 
     Raises:
         CstAsciiParseError: If parameter block parsing fails.
@@ -141,32 +157,27 @@ def get_all_impedances_from_cst_sweep_ascii(
 
     parameter_pattern = re.compile(r'#Parameters\s*=\s*\{(.+?)\}')
     
-    impedances: list[tuple[dict[str, float], Spectrum]] = []
+    quantities = []
 
     with open(filename) as fp:
+
         current_parameters: dict[str, float] | None = None
         current_lines: list[str] = []
+        blocks: list[tuple[dict[str, float], list[str]]] = []
 
         for line in fp:
-            line = line.strip()
-                
-            # Check if this comment line has parameters
-            re_match = parameter_pattern.search(line)
-            if re_match:
-
-                # process the previous block if it exists
+            # Check if this line has parameters
+            parameter_match = parameter_pattern.search(line)
+            
+            if parameter_match:
+                # attach the the previous block if it exists
                 if current_parameters is not None:
-                    impedances.append((
-                        current_parameters,
-                        _get_impedance_from_cst_ascii_lines(current_lines)
-                    ))
-                    if not silent:
-                        print(f'Parsed impedance: {current_parameters}, block has {len(current_lines)} lines')
-                    current_lines: list[str] = []
+                    blocks.append((current_parameters, current_lines))
+                    current_lines = []
 
                 # Parse parameters string into dictionary
                 current_parameters = {}
-                for param_str in re.split(r'[;,]', re_match.group(1)):
+                for param_str in re.split(r'[;,]', parameter_match.group(1)):
                     key_value = param_str.split('=')
                     if not len(key_value) == 2:
                         raise CstAsciiParseError(f'Error parsing parameter "{key_value}"')
@@ -176,54 +187,73 @@ def get_all_impedances_from_cst_sweep_ascii(
 
                     current_parameters[key] = value
 
-            elif line and current_parameters is not None:
-                # Here line is not with parameters, add to current block
+            if line:
                 current_lines.append(line)
 
-        # Add the last collected block if any
+        # Add the last collected block at the end of the for-loop
         if current_parameters is not None:
-            impedances.append((
-                current_parameters,
-                _get_impedance_from_cst_ascii_lines(current_lines)
+            blocks.append((current_parameters, current_lines))
+
+        # process collected blocks
+        for block in blocks:
+            quantities.append((
+                block[0],
+                _get_quantity_from_cst_ascii_lines(
+                    lines=block[1],
+                    is_complex=is_complex,
+                    convert_x_unit=convert_x_unit,
+                    header_line_index=header_line_index
+                )
             ))
             if not silent:
-                print(f'Parsed impedance: {current_parameters}, block has {len(current_lines)} lines')
+                print(f'Parsed quantity: {current_parameters}, block has {len(current_lines)} lines')
 
-        return impedances
+        return quantities
 
 
-def get_impedance_from_cst_sweep_ascii(
+def get_quantity_from_cst_sweep_ascii(
     filename: Path | str,
     parameter_filter: dict[str, float],
+    is_complex: bool = True,
+    convert_x_unit: bool = True,
+    header_line_index: int = 1,
     silent: bool = True,
-) -> Spectrum:
-    """Select an impedance trace matching parameters from a CST parametric sweep file. 
-    The ASCII file is obtained by selecting an **parametric** impedance trace in CST and
+) -> RealQuantity | ComplexQuantity:
+    """Select one trace matching parameters from a CST parametric sweep file. 
+    The ASCII file is obtained by selecting an *parametric* impedance trace in CST and
     using Post-Processing > Import/Export > ASCII.
-    Currently only Re/Im format is supported.
 
     Args:
         filename: Path to CST sweep ASCII file.
         parameter_filter: Matching criteria for parameters. Does not need to include all parameters
             from the CST project, just enough to unambigously identify the trace.
+        is_complex: Wether the CST quantitiy is real or complex valued.
+        convert_x_unit: If True, will infer X-axis unit from file and convert to base unit.
+        header_line_index: Which line (starting with 0) in a block is the table header.
         silent: If False, print search status.
 
     Returns:
-        Matching Spectrum.
+        Quantity matching the parameter filter. RealQuantity if `is_complex` is false,
+        or ComplexQuantity `is_complex` is true.
 
     Raises:
         CstAsciiParseError: If parsing fails, if there is no match for `parameter_filter`,
             or if there is *more than one* match for `parameter_filter.`
     """
 
-    all_impedances: list[tuple[dict[str, float], Spectrum]] \
-        = get_all_impedances_from_cst_sweep_ascii(filename, silent)
+    all_quantities = get_all_quantities_from_cst_sweep_ascii(
+        filename=filename,
+        is_complex=is_complex,
+        convert_x_unit=convert_x_unit,
+        header_line_index=header_line_index,
+        silent=silent
+    )
 
     # collect already scanned parameter combinations to check for duplicates
     scanned_parameters: list[dict[str, float]] = []
             
     # iterate over all impedances to find the matching one
-    for parameters, impedance in all_impedances:
+    for parameters, quantity in all_quantities:
 
         if any(_parameters_are_close(parameters, scanned) for scanned in scanned_parameters):
             raise CstAsciiParseError(f'Duplicate parameter combination found')
@@ -233,7 +263,7 @@ def get_impedance_from_cst_sweep_ascii(
             for key, value in parameter_filter.items()
         ):
             if not silent:
-                print(f'Found matching impedance for parameters: {parameter_filter}')
-            return impedance
+                print(f'Found matching quantity for parameters: {parameter_filter}')
+            return quantity
 
-    raise CstAsciiParseError(f'No impedance found matching parameters: {parameter_filter}')
+    raise CstAsciiParseError(f'No quantity found matching parameters: {parameter_filter}')
