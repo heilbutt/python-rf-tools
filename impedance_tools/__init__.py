@@ -1,7 +1,5 @@
 from .cst import (
-    get_quantity_from_cst_ascii,
-    get_quantity_from_cst_sweep_ascii,
-    get_all_quantities_from_cst_sweep_ascii
+    get_quantity_from_cst_ascii
 )
 
 from .quantities import (
@@ -17,8 +15,6 @@ from .units import (
 
 __all__ = [
     'get_quantity_from_cst_ascii',
-    'get_quantity_from_cst_sweep_ascii',
-    'get_all_quantities_from_cst_sweep_ascii',
     'RealQuantity',
     'ComplexQuantity',
     'TIME_UNITS',

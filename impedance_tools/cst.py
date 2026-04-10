@@ -5,7 +5,7 @@ import numpy as np
 from .units import TIME_UNITS, FREQUENCY_UNITS, LENGTH_UNITS
 from .quantities import RealQuantity, ComplexQuantity
 
-from typing import Sequence
+from typing import Literal, Sequence, overload
 
 
 class CstAsciiParseError(Exception):
@@ -61,6 +61,28 @@ def _parameters_are_close(
     return True
 
 
+@overload
+def _get_quantity_from_cst_ascii_lines(
+    lines: Sequence[str],
+    *,
+    is_complex: Literal[True] = ...,
+    convert_x_unit: bool = ...,
+    header_line_index: int = ...,
+) -> ComplexQuantity:
+    ...
+
+
+@overload
+def _get_quantity_from_cst_ascii_lines(
+    lines: Sequence[str],
+    *,
+    is_complex: Literal[False],
+    convert_x_unit: bool = ...,
+    header_line_index: int = ...,
+) -> RealQuantity:
+    ...
+
+
 def _get_quantity_from_cst_ascii_lines(
     lines: Sequence[str],
     is_complex: bool = True,
@@ -83,7 +105,7 @@ def _get_quantity_from_cst_ascii_lines(
     else:
         x_unit_factor = 1
 
-    if is_complex:
+    if is_complex: # complex quantity
         # Try format Real-imaginary
         header_match = re.search(r'(\[Re).*(\[Im)', header_line)
         if header_match:
@@ -104,116 +126,80 @@ def _get_quantity_from_cst_ascii_lines(
     
         raise CstAsciiParseError(f'Could not determine complex format. Is this a complex-valued export from CST?')
     
-    else:
+    else: # real quantity
         raw = np.loadtxt(lines, comments='#')
         return RealQuantity(
             raw[:,0] * x_unit_factor,
             raw[:,1]
         )
+
+
+# @overload
+# def get_quantity_from_cst_ascii(
+#     filename: Path | str,
+#     is_complex: Literal[True] = ...,
+#     convert_x_unit: bool = ...,
+#     header_line_index: int = ...,
+# ) -> ComplexQuantity:
+#     ...
+
+
+# @overload
+# def get_quantity_from_cst_ascii(
+#     filename: Path | str,
+#     is_complex: Literal[False],
+#     convert_x_unit: bool = ...,
+#     header_line_index: int = ...,
+# ) -> RealQuantity:
+#     ...
+
+
+# def get_quantity_from_cst_ascii(
+#     filename: Path | str,
+#     is_complex: bool = True,
+#     convert_x_unit: bool = True,
+#     header_line_index: int = 1,
+# ) -> RealQuantity | ComplexQuantity:
     
+#     with open(filename) as fp:
+#         lines = fp.readlines()
+#     return _get_quantity_from_cst_ascii_lines(
+#         lines=lines,
+#         is_complex=is_complex,
+#         convert_x_unit=convert_x_unit,
+#         header_line_index=header_line_index
+#     )
+
+
+@overload
+def get_quantity_from_cst_ascii(
+    filename: Path | str,
+    *,
+    parameter_filter: dict[str, float] = ...,
+    is_complex: Literal[True] = ...,
+    convert_x_unit: bool = ...,
+    header_line_index: int = ...,
+    silent: bool = ...,
+) -> ComplexQuantity:
+    ...
+    
+
+@overload
+def get_quantity_from_cst_ascii(
+    filename: Path | str,
+    *,
+    parameter_filter: dict[str, float] = ...,
+    is_complex: Literal[False],
+    convert_x_unit: bool = ...,
+    header_line_index: int = ...,
+    silent: bool = ...,
+) -> RealQuantity:
+    ...
+
 
 def get_quantity_from_cst_ascii(
     filename: Path | str,
-    is_complex: bool = True,
-    convert_x_unit: bool = True,
-    header_line_index: int = 1,
-) -> RealQuantity | ComplexQuantity:
-    
-    with open(filename) as fp:
-        lines = fp.readlines()
-    return _get_quantity_from_cst_ascii_lines(
-        lines=lines,
-        is_complex=is_complex,
-        convert_x_unit=convert_x_unit,
-        header_line_index=header_line_index
-    )
-
-
-def get_all_quantities_from_cst_sweep_ascii(
-    filename: Path | str,
-    is_complex: bool = True,
-    convert_x_unit: bool = True,
-    header_line_index: int = 1,
-    silent: bool = True,
-) -> list[tuple[dict[str, float], RealQuantity]] | list[tuple[dict[str, float], ComplexQuantity]]:
-    """Load all quantities from a CST parametric sweep export ASCII file.
-    The ASCII is obtained by selecting an *parametric* impedance trace in CST and
-    using Post-Processing > Import/Export > ASCII.
-    
-    Args:
-        filename: Path to CST parametric sweep ASCII file.
-        is_complex: Wether the CST quantitiy is real or complex valued.
-        convert_x_unit: If True, will infer X-axis unit from file and convert to base unit.
-        header_line_index: Which line (starting with 0) in a block is the table header.
-        silent: If False, print parsing status.
-
-    Returns:
-        List of (parameter dictionary, RealQuantity) tuples if `is_complex` is false,
-        or list of (parameter dictionary, ComplexQuantity) tuples if `is_complex` is true
-
-    Raises:
-        CstAsciiParseError: If parameter block parsing fails.
-    """
-
-    parameter_pattern = re.compile(r'#Parameters\s*=\s*\{(.+?)\}')
-    
-    quantities = []
-
-    with open(filename) as fp:
-
-        current_parameters: dict[str, float] | None = None
-        current_lines: list[str] = []
-        blocks: list[tuple[dict[str, float], list[str]]] = []
-
-        for line in fp:
-            # Check if this line has parameters
-            parameter_match = parameter_pattern.search(line)
-            
-            if parameter_match:
-                # attach the the previous block if it exists
-                if current_parameters is not None:
-                    blocks.append((current_parameters, current_lines))
-                    current_lines = []
-
-                # Parse parameters string into dictionary
-                current_parameters = {}
-                for param_str in re.split(r'[;,]', parameter_match.group(1)):
-                    key_value = param_str.split('=')
-                    if not len(key_value) == 2:
-                        raise CstAsciiParseError(f'Error parsing parameter "{key_value}"')
-                    
-                    key = key_value[0].strip()
-                    value = float(key_value[1].strip())
-
-                    current_parameters[key] = value
-
-            if line:
-                current_lines.append(line)
-
-        # Add the last collected block at the end of the for-loop
-        if current_parameters is not None:
-            blocks.append((current_parameters, current_lines))
-
-        # process collected blocks
-        for block in blocks:
-            quantities.append((
-                block[0],
-                _get_quantity_from_cst_ascii_lines(
-                    lines=block[1],
-                    is_complex=is_complex,
-                    convert_x_unit=convert_x_unit,
-                    header_line_index=header_line_index
-                )
-            ))
-            if not silent:
-                print(f'Parsed quantity: {current_parameters}, block has {len(current_lines)} lines')
-
-        return quantities
-
-
-def get_quantity_from_cst_sweep_ascii(
-    filename: Path | str,
-    parameter_filter: dict[str, float],
+    parameter_filter: dict[str, float] = {},
     is_complex: bool = True,
     convert_x_unit: bool = True,
     header_line_index: int = 1,
@@ -241,29 +227,68 @@ def get_quantity_from_cst_sweep_ascii(
             or if there is *more than one* match for `parameter_filter.`
     """
 
-    all_quantities = get_all_quantities_from_cst_sweep_ascii(
-        filename=filename,
+    # match lines in CST export against this to find parameters
+    parameter_pattern = re.compile(r'(\w+)\s*=\s*([-+]?\d+(?:\.\d+)?)')
+
+    block: list[str] = []
+    block_matches: bool = False
+    any_previous_block_matches: bool = False
+    quantity = None
+
+    for line in open(filename):
+
+        if block_matches:
+            block.append(line)
+
+        # No further processing of data lines
+        if not line.startswith('#'):
+            continue
+
+        # Line is a comment, try to parse parameters
+        pairs = parameter_pattern.findall(line)
+        if not pairs:
+            continue
+        current_parameters = {k: float(v) for k, v in pairs}
+
+        # Line contains parameters and is the start of a new block.
+        # Check if block matches parameter filter
+        if not parameter_filter:
+            # always match if filter is empty
+            parameters_match = True
+        else:
+            parameters_match = _parameters_are_close(
+                parameter_filter, current_parameters,
+                ensure_same_key_set=False
+            )
+
+        if parameters_match:
+            if any_previous_block_matches:
+                raise CstAsciiParseError(f'Parameter filter is ambiguous, multiple matching blocks found in `{filename}`')
+
+            # parameters matched for the first time, start collecting lines
+            block_matches = True
+            any_previous_block_matches = True
+            block.clear()
+            block.append(line)
+            continue
+        else:
+            if block_matches:
+                block.pop() # remove last line that was collected from next block
+            block_matches = False
+        
+    # exiting loop, there should be one parsable block now
+    if not block:
+        raise CstAsciiParseError(f'Could not parse parameter combination `{parameter_filter}` from `{filename}`')
+
+    quantity = _get_quantity_from_cst_ascii_lines(
+        lines=block,
         is_complex=is_complex,
         convert_x_unit=convert_x_unit,
-        header_line_index=header_line_index,
-        silent=silent
+        header_line_index=header_line_index
     )
-
-    # collect already scanned parameter combinations to check for duplicates
-    scanned_parameters: list[dict[str, float]] = []
-            
-    # iterate over all impedances to find the matching one
-    for parameters, quantity in all_quantities:
-
-        if any(_parameters_are_close(parameters, scanned) for scanned in scanned_parameters):
-            raise CstAsciiParseError(f'Duplicate parameter combination found')
-
-        if all(
-            key in parameters and _is_close(parameters[key], value)
-            for key, value in parameter_filter.items()
-        ):
-            if not silent:
-                print(f'Found matching quantity for parameters: {parameter_filter}')
-            return quantity
-
-    raise CstAsciiParseError(f'No quantity found matching parameters: {parameter_filter}')
+    if not silent:
+        print(f'Parsed quantity, block has {len(block)} lines including headers.')
+        print(f'  First line: `{block[0][:30]} ...`')
+        print(f'  Last line:  `{block[-1][:30]} ...`')
+    
+    return quantity
