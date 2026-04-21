@@ -1,4 +1,5 @@
 .vscode/
+examples/
 
 __pycache__/
 *.py[codz]

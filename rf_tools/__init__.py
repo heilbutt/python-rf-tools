@@ -1,3 +1,8 @@
+from .beams import (
+    Bunch,
+    Beam
+)
+
 from .cst import (
     get_quantity_from_cst_ascii
 )
@@ -14,6 +19,8 @@ from .units import (
 )
 
 __all__ = [
+    'Bunch',
+    'Beam',
     'get_quantity_from_cst_ascii',
     'RealQuantity',
     'ComplexQuantity',
