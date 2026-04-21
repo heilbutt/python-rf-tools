@@ -161,103 +161,6 @@ def get_quantity_from_cst_ascii(
     ...
 
 
-# def get_quantity_from_cst_ascii(
-#     filename: Path | str,
-#     parameter_filter: dict[str, float] = {},
-#     is_complex: bool = True,
-#     convert_x_unit: bool = True,
-#     header_line_index: int = 1,
-#     silent: bool = True,
-# ) -> RealQuantity | ComplexQuantity:
-#     """Select one trace matching parameters from a CST parametric sweep file. 
-#     The ASCII file is obtained by selecting an *parametric* impedance trace in CST and
-#     using Post-Processing > Import/Export > ASCII.
-
-#     Args:
-#         filename: Path to CST sweep ASCII file.
-#         parameter_filter: Matching criteria for parameters. Does not need to include all parameters
-#             from the CST project, just enough to unambigously identify the trace.
-#         is_complex: Wether the CST quantitiy is real or complex valued.
-#         convert_x_unit: If True, will infer X-axis unit from file and convert to base unit.
-#         header_line_index: Which line (starting with 0) in a block is the table header.
-#         silent: If False, print search status.
-
-#     Returns:
-#         Quantity matching the parameter filter. RealQuantity if `is_complex` is false,
-#         or ComplexQuantity `is_complex` is true.
-
-#     Raises:
-#         CstAsciiParseError: If parsing fails, if there is no match for `parameter_filter`,
-#             or if there is *more than one* match for `parameter_filter.`
-#     """
-
-#     # match lines in CST export against this to find parameters
-#     parameter_pattern = re.compile(r'(\w+)\s*=\s*([-+]?\d+(?:\.\d+)?)')
-
-#     block: list[str] = []
-#     block_matches: bool = False
-#     any_previous_block_matches: bool = False
-#     quantity = None
-
-#     for line in open(filename):
-
-#         if block_matches:
-#             block.append(line)
-
-#         # No further processing of data lines
-#         if not line.startswith('#'):
-#             continue
-
-#         # Line is a comment, try to parse parameters
-#         pairs = parameter_pattern.findall(line)
-#         if not pairs:
-#             continue
-#         current_parameters = {k: float(v) for k, v in pairs}
-
-#         # Line contains parameters and is the start of a new block.
-#         # Check if block matches parameter filter
-#         if not parameter_filter:
-#             # always match if filter is empty
-#             parameters_match = True
-#         else:
-#             parameters_match = _parameters_are_close(
-#                 parameter_filter, current_parameters,
-#                 ensure_same_key_set=False
-#             )
-
-#         if parameters_match:
-#             if any_previous_block_matches:
-#                 raise CstAsciiParseError(f'Parameter filter is ambiguous, multiple matching blocks found in `{filename}`')
-
-#             # parameters matched for the first time, start collecting lines
-#             block_matches = True
-#             any_previous_block_matches = True
-#             block.clear()
-#             block.append(line)
-#             continue
-#         else:
-#             if block_matches:
-#                 block.pop() # remove last line that was collected from next block
-#             block_matches = False
-        
-#     # exiting loop, there should be one parsable block now
-#     if not block:
-#         raise CstAsciiParseError(f'Could not parse parameter combination `{parameter_filter}` from `{filename}`')
-
-#     quantity = _get_quantity_from_cst_ascii_lines(
-#         lines=block,
-#         is_complex=is_complex,
-#         convert_x_unit=convert_x_unit,
-#         header_line_index=header_line_index
-#     )
-#     if not silent:
-#         print(f'Parsed quantity, block has {len(block)} lines including headers.')
-#         print(f'  First line: `{block[0][:30]} ...`')
-#         print(f'  Last line:  `{block[-1][:30]} ...`')
-    
-#     return quantity
-
-
 def get_quantity_from_cst_ascii(
     filename: Path | str,
     parameter_filter: dict[str, float] = {},
@@ -293,57 +196,55 @@ def get_quantity_from_cst_ascii(
 
     block_slice_start: int | None = None
     block_slice_end: int | None = None
-    data_after_block_start = False
+    data_after_header_match = False
 
     # first, iterate over entire file without actually parsing,
     # this will also ensure that parameter filter is unambiguous
     for n, line in enumerate(open(filename, 'r')):
-        # No processing of data lines
+        
+        # check if comment line
         if not line.startswith('#'):
             if block_slice_start is not None:
-                data_after_block_start = True
-            continue
+                data_after_header_match = True
+            continue # No processing of data lines
 
-        # Line is a comment
-        if (block_slice_start is not None) and data_after_block_start:
+        # block ends when encountering comment after data
+        if (block_slice_start is not None) and data_after_header_match:
             block_slice_end = n
 
-        if parameter_filter: # user has defined parameters to filter by
-    
-            pairs = parameters_pattern.findall(line)
-            if not pairs:
-                continue
+        # check if comment line is header row
+        if not (
+            pairs := parameters_pattern.findall(line)
+            or no_parameters_pattern.match(line)
+        ):
+            continue # not a header row
 
+        if parameter_filter: # user has defined parameters to filter by
             if not _parameters_are_close(
                 parameter_filter,
                 {k: float(v) for k, v in pairs},
                 ensure_same_key_set=False
             ):
-                continue
-
-        else: # user has not provided parameter filter
-            if not no_parameters_pattern.match(line):
-                continue
+                continue # parameters found, but do not match filter
 
         if block_slice_start is not None:
             raise CstAsciiParseError(f'Parameter filter `{parameter_filter}` is ambiguous, multiple matching blocks found in `{filename}`')
         
         block_slice_start = n
-        data_after_block_start = False
+        data_after_header_match = False
 
+    # end of loop, must have a match by now
     if block_slice_start is None:
         raise CstAsciiParseError(f'Could not parse parameter combination `{parameter_filter}` from `{filename}`')
 
-    # actually load content into memory
+    # actually load content into memory and parse it
     with open(filename, 'r') as fp:
         # for itertools.islice, None means start=0 or end=-1
         block = list(islice(fp, block_slice_start, block_slice_end))
-
     if not silent:
         print(f'Found quantity, block has {len(block)} lines including headers.')
         print(f'  First line: `{block[0][:30]} ...`')
         print(f'  Last line:  `{block[-1][:30]} ...`')
-    
     quantity = _get_quantity_from_cst_ascii_lines(
         lines=block,
         is_complex=is_complex,
