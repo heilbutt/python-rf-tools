@@ -4,9 +4,9 @@ import numpy as np
 from itertools import islice
 
 from .units import TIME_UNITS, FREQUENCY_UNITS, LENGTH_UNITS
-from .quantities import RealQuantity, ComplexQuantity
 
 from typing import Literal, Sequence, overload
+from .quantities import RealArray, ComplexArray
 
 
 class CstAsciiParseError(Exception):
@@ -15,22 +15,6 @@ class CstAsciiParseError(Exception):
 
 class CstAsciiUnitParseError(Exception):
     """Exception raised for errors parsing units in CST ASCII data."""
-
-
-def _is_close(a: float, b: float, rel_tol: float = 1e-09, abs_tol: float = 0.0):
-    """Check if two floats are close.
-    Between rel_tol and abs_tol, the less strict one takes precedence.
-
-    Args:
-        a: First value.
-        b: Second value.
-        rel_tol: Relative tolerance.
-        abs_tol: Absolute tolerance.
-
-    Returns:
-        True if the values are close within tolerances.
-    """
-    return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
 
 
 def _parameters_are_close(
@@ -57,7 +41,7 @@ def _parameters_are_close(
             raise KeyError('`a` and `b` do not have identical sets of keys')
 
     for k in a.keys():
-        if not _is_close(a[k], b[k], rel_tol=rel_tol, abs_tol=abs_tol):
+        if not np.isclose(a[k], b[k], rtol=rel_tol, atol=abs_tol):
             return False
     return True
 
@@ -69,7 +53,7 @@ def _get_quantity_from_cst_ascii_lines(
     is_complex: Literal[True] = ...,
     convert_x_unit: bool = ...,
     header_line_index: int = ...,
-) -> ComplexQuantity:
+) -> tuple[RealArray, ComplexArray]:
     ...
 
 
@@ -80,7 +64,7 @@ def _get_quantity_from_cst_ascii_lines(
     is_complex: Literal[False],
     convert_x_unit: bool = ...,
     header_line_index: int = ...,
-) -> RealQuantity:
+) -> tuple[RealArray, RealArray]:
     ...
 
 
@@ -89,7 +73,7 @@ def _get_quantity_from_cst_ascii_lines(
     is_complex: bool = True,
     convert_x_unit: bool = True,
     header_line_index: int = 1,
-) -> RealQuantity | ComplexQuantity:
+) -> tuple[RealArray, RealArray | ComplexArray]:
     
     header_line = lines[header_line_index]
 
@@ -111,7 +95,7 @@ def _get_quantity_from_cst_ascii_lines(
         header_match = re.search(r'(\[Re).*(\[Im)', header_line)
         if header_match:
             raw = np.loadtxt(lines, comments='#')
-            return ComplexQuantity(
+            return (
                 raw[:,0] * x_unit_factor,
                 raw[:,1] + 1j * raw[:,2]
             )
@@ -120,7 +104,7 @@ def _get_quantity_from_cst_ascii_lines(
         header_match = re.search(r'(\[Mag).*(\[Pha)', header_line)
         if header_match:
             raw = np.loadtxt(lines, comments='#')
-            return ComplexQuantity(
+            return (
                 raw[:,0] * x_unit_factor,
                 raw[:,1] * np.exp(1j * raw[:,2])
             )
@@ -129,7 +113,7 @@ def _get_quantity_from_cst_ascii_lines(
     
     else: # real quantity
         raw = np.loadtxt(lines, comments='#')
-        return RealQuantity(
+        return (
             raw[:,0] * x_unit_factor,
             raw[:,1]
         )
@@ -144,7 +128,7 @@ def get_quantity_from_cst_ascii(
     convert_x_unit: bool = ...,
     header_line_index: int = ...,
     silent: bool = ...,
-) -> ComplexQuantity:
+) -> tuple[RealArray, ComplexArray]:
     ...
     
 
@@ -157,7 +141,7 @@ def get_quantity_from_cst_ascii(
     convert_x_unit: bool = ...,
     header_line_index: int = ...,
     silent: bool = ...,
-) -> RealQuantity:
+) -> tuple[RealArray, RealArray]:
     ...
 
 
@@ -168,28 +152,8 @@ def get_quantity_from_cst_ascii(
     convert_x_unit: bool = True,
     header_line_index: int = 1,
     silent: bool = True,
-) -> RealQuantity | ComplexQuantity:
-    """Select one trace matching parameters from a CST parametric sweep file. 
-    The ASCII file is obtained by selecting an *parametric* impedance trace in CST and
-    using Post-Processing > Import/Export > ASCII.
+) -> tuple[RealArray, RealArray | ComplexArray]:
 
-    Args:
-        filename: Path to CST sweep ASCII file.
-        parameter_filter: Matching criteria for parameters. Does not need to include all parameters
-            from the CST project, just enough to unambigously identify the trace.
-        is_complex: Wether the CST quantitiy is real or complex valued.
-        convert_x_unit: If True, will infer X-axis unit from file and convert to base unit.
-        header_line_index: Which line (starting with 0) in a block is the table header.
-        silent: If False, print search status.
-
-    Returns:
-        Quantity matching the parameter filter. RealQuantity if `is_complex` is false,
-        or ComplexQuantity `is_complex` is true.
-
-    Raises:
-        CstAsciiParseError: If parsing fails, if there is no match for `parameter_filter`,
-            or if there is *more than one* match for `parameter_filter.`
-    """
     # match lines in CST export against this to find parameters
     parameters_pattern = re.compile(r'(\w+)\s*=\s*([-+]?\d+(?:\.\d+)?)')
     no_parameters_pattern = re.compile(r'#$')
@@ -241,15 +205,15 @@ def get_quantity_from_cst_ascii(
     with open(filename, 'r') as fp:
         # for itertools.islice, None means start=0 or end=-1
         block = list(islice(fp, block_slice_start, block_slice_end))
+    
     if not silent:
         print(f'Found quantity, block has {len(block)} lines including headers.')
         print(f'  First line: `{block[0][:30]} ...`')
         print(f'  Last line:  `{block[-1][:30]} ...`')
-    quantity = _get_quantity_from_cst_ascii_lines(
+    
+    return _get_quantity_from_cst_ascii_lines(
         lines=block,
         is_complex=is_complex,
         convert_x_unit=convert_x_unit,
         header_line_index=header_line_index
     )
-    
-    return quantity
