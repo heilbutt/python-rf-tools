@@ -56,7 +56,6 @@ def _get_quantity_from_cst_ascii_lines(
 ) -> tuple[RealArray, ComplexArray]:
     ...
 
-
 @overload
 def _get_quantity_from_cst_ascii_lines(
     lines: Sequence[str],
@@ -66,7 +65,6 @@ def _get_quantity_from_cst_ascii_lines(
     header_line_index: int = ...,
 ) -> tuple[RealArray, RealArray]:
     ...
-
 
 def _get_quantity_from_cst_ascii_lines(
     lines: Sequence[str],
@@ -131,7 +129,6 @@ def get_quantity_from_cst_ascii(
 ) -> tuple[RealArray, ComplexArray]:
     ...
     
-
 @overload
 def get_quantity_from_cst_ascii(
     filename: Path | str,
@@ -143,7 +140,6 @@ def get_quantity_from_cst_ascii(
     silent: bool = ...,
 ) -> tuple[RealArray, RealArray]:
     ...
-
 
 def get_quantity_from_cst_ascii(
     filename: Path | str,
@@ -158,58 +154,62 @@ def get_quantity_from_cst_ascii(
     parameters_pattern = re.compile(r'(\w+)\s*=\s*([-+]?\d+(?:\.\d+)?)')
     no_parameters_pattern = re.compile(r'#$')
 
-    block_slice_start: int | None = None
-    block_slice_end: int | None = None
-    data_after_header_match = False
-
     # first, iterate over entire file without actually parsing,
     # this will also ensure that parameter filter is unambiguous
-    for n, line in enumerate(open(filename, 'r')):
-        
-        # check if comment line
+
+    # collect header lines and their indices
+    header_lines: list[tuple[int, str]] = []
+    for line_number, line in enumerate(open(filename, 'r')):
         if not line.startswith('#'):
-            if block_slice_start is not None:
-                data_after_header_match = True
-            continue # No processing of data lines
-
-        # block ends when encountering comment after data
-        if (block_slice_start is not None) and data_after_header_match:
-            block_slice_end = n
-
-        # check if comment line is header row
+            continue # not a comment line
         if not (
-            pairs := parameters_pattern.findall(line)
+            parameters_pattern.findall(line)
             or no_parameters_pattern.match(line)
         ):
-            continue # not a header row
+            continue # not a header line
+        header_lines.append((line_number, line))
 
-        if parameter_filter: # user has defined parameters to filter by
-            if not _parameters_are_close(
+    block_slice_start: int | None = None
+    block_slice_end: int | None = None
+
+    if not parameter_filter:
+        # if user specifies no parameter filter, there must be exactly one match
+        if not len(header_lines) == 1:
+            raise CstAsciiParseError(f'No parameter filter specified, but {len(header_lines)} blocks found in `{filename}`') 
+        # for islice, `None` indicated full range
+        block_slice_start = None
+        block_slice_end = None
+    else:
+        # if user specified parameter filter, there must be exactly one match
+        for n, (line_number, line) in enumerate(header_lines):
+            if _parameters_are_close(
                 parameter_filter,
-                {k: float(v) for k, v in pairs},
+                {k: float(v) for k, v in parameters_pattern.findall(line)},
                 ensure_same_key_set=False
             ):
-                continue # parameters found, but do not match filter
+                if block_slice_start is not None:
+                    # already matched before
+                    raise CstAsciiParseError(f'Parameter filter `{parameter_filter}` is ambiguous, multiple matching headerlines found (at least) in line {block_slice_start} and line {line_number} in `{filename}`')
+                block_slice_start = line_number
+                try:
+                    block_slice_end = header_lines[n+1][0]
+                except IndexError: # last block has no next header
+                    block_slice_end = None
 
-        if block_slice_start is not None:
-            raise CstAsciiParseError(f'Parameter filter `{parameter_filter}` is ambiguous, multiple matching blocks found in `{filename}`')
-        
-        block_slice_start = n
-        data_after_header_match = False
-
-    # end of loop, must have a match by now
-    if block_slice_start is None:
-        raise CstAsciiParseError(f'Could not parse parameter combination `{parameter_filter}` from `{filename}`')
+        # raise error if no match at all
+        if block_slice_start is None:
+            raise CstAsciiParseError(f'Parameter filter `{parameter_filter}` delivered no matches in `{filename}`')
+                
 
     # actually load content into memory and parse it
     with open(filename, 'r') as fp:
-        # for itertools.islice, None means start=0 or end=-1
+        # for itertools.islice, `None` means full range
         block = list(islice(fp, block_slice_start, block_slice_end))
     
     if not silent:
         print(f'Found quantity, block has {len(block)} lines including headers.')
-        print(f'  First line: `{block[0][:30]} ...`')
-        print(f'  Last line:  `{block[-1][:30]} ...`')
+        print(f'  First line: `{block[0][:50]} ...`')
+        print(f'  Last line:  `{block[-1][:50]} ...`')
     
     return _get_quantity_from_cst_ascii_lines(
         lines=block,
