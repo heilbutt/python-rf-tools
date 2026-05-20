@@ -1,3 +1,8 @@
+from .wakes_and_impedances import(
+    LongitudinalResonator,
+    TransverseResonator
+)
+
 from .beams import (
     get_binomial_bunch_profile,
     get_gaussian_bunch_profile,
@@ -23,6 +28,8 @@ from .units import (
 )
 
 __all__ = [
+    'LongitudinalResonator',
+    'TransverseResonator',
     'get_binomial_bunch_profile',
     'get_gaussian_bunch_profile',
     'Bunch',
