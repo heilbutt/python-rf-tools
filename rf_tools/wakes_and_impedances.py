@@ -69,8 +69,7 @@ class LongitudinalResonator(_Resonator):
         if wake_length is None: # fully decayed wake
             impedance[mask] = self.shunt_impedance / (
                 1 + 1j * self.quality_factor * (
-                    omega[mask] / self.omega_r
-                    - self.omega_r / omega[mask]
+                    omega[mask] / self.omega_r - self.omega_r / omega[mask]
                 )
             )
 

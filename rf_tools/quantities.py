@@ -159,56 +159,54 @@ class ComplexQuantity:
 
     @property
     def real(self) -> RealArray:
-        return np.real(self.cmplx)
+        return np.real(self.value)
     
     @real.setter
     def real(self, new_values: RealArray) -> None:
         if not (new_values.ndim == 1 and np.isrealobj(new_values)):
             raise ValueError('New real part must be real-valued 1D numpy array')
-        self.cmplx = new_values + 1j*np.imag(self.cmplx)
+        self.value = new_values + 1j*np.imag(self.value)
     
     @property
     def imag(self) -> RealArray:
-        return np.imag(self.cmplx)
+        return np.imag(self.value)
 
     @imag.setter
     def imag(self, new_values: RealArray) -> None:
-        
         if not (new_values.ndim == 1 and np.isrealobj(new_values)):
             raise ValueError('New imaginary part must be real-valued 1D numpy array')
-        
-        self.cmplx = np.real(self.cmplx) + 1j*new_values
+        self.value = np.real(self.value) + 1j*new_values
 
     @property
     def mag(self) -> RealArray:
-        return np.abs(self.cmplx)
+        return np.abs(self.value)
     
     @mag.setter
     def mag(self, new_values: RealArray) -> None:
         if not (new_values.ndim == 1 and np.isrealobj(new_values)):
             raise ValueError('New magnitude must be real-valued 1D numpy array')
-        self.cmplx = np.abs(new_values) * np.exp(1j*np.angle(self.cmplx))
+        self.value = np.abs(new_values) * np.exp(1j*np.angle(self.value))
 
     @property
     def phase(self) -> RealArray:
-        return np.angle(self.cmplx)
+        return np.angle(self.value)
     
     @phase.setter
     def phase(self, new_values: RealArray) -> None:
         if not (new_values.ndim == 1 and np.isrealobj(new_values)):
             raise ValueError('New phase must be real-valued 1D numpy array')
-        self.cmplx = np.abs(self.cmplx) * np.exp(1j*new_values)
+        self.value = np.abs(self.value) * np.exp(1j*new_values)
 
     def __neg__(self) -> ComplexQuantity:
-        return type(self)(self.x, -self.cmplx)
+        return type(self)(self.x, -self.value)
 
     def __add__(self, other: RealQuantity | ComplexQuantity | complex) -> ComplexQuantity :
         if isinstance(other, (RealQuantity, ComplexQuantity)):
             if not np.allclose(self.x, other.x):
                 raise XAxisMismatchError('X values do not match for addition')
-            return type(self)(self.x, self.cmplx + other.value)
+            return type(self)(self.x, self.value + other.value)
         if isinstance(other, (int, float, complex)):
-            return type(self)(self.x, self.cmplx + other)
+            return type(self)(self.x, self.value + other)
         
         return NotImplemented
 
