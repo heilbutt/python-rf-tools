@@ -1,4 +1,4 @@
-from cmath import pi
+from math import pi, sqrt
 import numpy as np
 
 from .quantities import RealArray, ComplexArray
@@ -15,6 +15,9 @@ class _Resonator:
         
         self._f_r = resonant_frequency
         self._R = shunt_impedance
+
+        if not quality_factor > 0.5:
+            raise ValueError(f'For valid resonator model, quality factor must be greater than 0.5, but instead got {quality_factor:.2f}')
         self._Q = quality_factor
 
     @property
@@ -35,7 +38,19 @@ class _Resonator:
     
     @property
     def R_over_Q(self) -> float:
-        return self._R / self._Q # same unit as shunt impedance
+        return self.shunt_impedance / self.quality_factor # same unit as shunt impedance
+    
+    @property
+    def damping_coefficient(self) -> float:
+        return self.omega_r / 2 / self.quality_factor # 1/s
+
+    @property
+    def reduced_quality_factor(self) -> float:
+        return sqrt(self.quality_factor**2 - 0.25) # dimensionless
+
+    @property
+    def reduced_omega_r(self) -> float:
+        return self.omega_r * sqrt(1 - 0.25 / self.reduced_quality_factor**2) # rad/s
 
 
 class LongitudinalResonator(_Resonator):
@@ -74,17 +89,40 @@ class LongitudinalResonator(_Resonator):
             )
 
         else: # finite wake length, partially decayed
-            aa = self.shunt_impedance * omega[mask] / 2 / self.quality_factor
-            bb = self.omega_r / 2 / self.quality_factor
-            cc = self.omega_r * np.sqrt(1 - 1 / 4 / self.quality_factor**2)
+            exp_term = np.exp(-(self.damping_coefficient - 1j * (self.reduced_omega_r - omega[mask])) * wake_length)
             impedance[mask] = (
-                (aa * (1 - np.exp(-(bb - 1j * (cc - omega[mask])) * wake_length)))
-                / (bb - 1j * (cc - omega[mask]))
+                (self.R_over_Q * omega[mask] / 2 * (1 - exp_term))
+                / (self.damping_coefficient - 1j * (self.reduced_omega_r - omega[mask]))
             )
 
         return (
             frequency_array, # Hz
             impedance # Ohm (or whatever unit of shunt impedance was)
+        )
+    
+    def get_wake_function(
+        self,
+        time_array: RealArray,
+        zero_time_tolerance: float = 1e-12 # s
+    ) -> tuple[RealArray, RealArray]:
+        
+        wake_function = (
+            self.omega_r * self.R_over_Q
+            * np.exp(-self.damping_coefficient * time_array)
+            * (
+                np.cos(self.reduced_omega_r * time_array)
+                - np.sin(self.reduced_omega_r * time_array) / 2 / self.reduced_quality_factor
+            )
+        )
+
+        # causal wake function
+        wake_function[time_array < -zero_time_tolerance] = 0 
+        # fundamental beam-loading theorem
+        wake_function[np.abs(time_array) < zero_time_tolerance] /= 2
+
+        return (
+            time_array, # s
+            wake_function # V/C (or whatever unit of shunt impedance was)
         )
     
 
@@ -115,4 +153,24 @@ class TransverseResonator(_Resonator):
         return (
             frequency_array, # Hz
             impedance # Ohm (or whatever unit of shunt impedance was)
+        )
+
+    def get_wake_function(
+        self,
+        time_array: RealArray,
+        zero_time_tolerance: float = 1e-12 # s
+    ) -> tuple[RealArray, RealArray]:
+
+        wake_function = (
+            self.omega_r * self.R_over_Q
+            * np.exp(-self.damping_coefficient * time_array)
+            * np.sin(self.reduced_omega_r * time_array)
+        )
+
+        # causal wake function
+        wake_function[time_array < -zero_time_tolerance] = 0 
+
+        return (
+            time_array, # s
+            wake_function # V/C/m (or whatever unit of shunt impedance was)
         )
