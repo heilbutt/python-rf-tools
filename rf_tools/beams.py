@@ -320,10 +320,12 @@ class Beam:
         
         beam_freq, beam_spectrum = self.get_spectrum() # Hz, C
 
-        if (beam_freq[0] > impedance_frequency_array[0]) or (beam_freq[-1] < impedance_frequency_array[-1]):
+        if (
+            (beam_freq[0] > impedance_frequency_array[0])
+            or (beam_freq[-1] < impedance_frequency_array[-1])
+        ) and not self.silent:
             print(f'WARNING: Beam spectrum frequency range ({beam_freq[0]} - {beam_freq[-1]} Hz) does not cover impedance frequency range ({impedance_frequency_array[0]} - {impedance_frequency_array[-1]} Hz). This may lead to inaccurate results')
 
-  
         real_impedance_at_beam_freq = np.interp(
                 x=beam_freq,
                 xp=impedance_frequency_array,
@@ -382,34 +384,50 @@ class Beam:
         negative_real_impedance_handling: Literal['ignore', 'clip', 'abs'] = 'ignore'
     ) -> tuple[RealArray, RealArray]:
 
-        beam_freq, _ = self.get_spectrum() # Hz
+        beam_freq, beam_spectrum = self.get_spectrum() # Hz, C
+
+        if (
+            (beam_freq[0] > impedance_frequency_array[0])
+            or (beam_freq[-1] < impedance_frequency_array[-1])
+        ) and not self.silent:
+            print(f'WARNING: Beam spectrum frequency range ({beam_freq[0]} - {beam_freq[-1]} Hz) does not cover impedance frequency range ({impedance_frequency_array[0]} - {impedance_frequency_array[-1]} Hz). This may lead to inaccurate results')
+
+        real_impedance_at_beam_freq = np.interp(
+                x=beam_freq,
+                xp=impedance_frequency_array,
+                fp=np.real(impedance_value_array),
+                left=0.0, right=0.0
+        )
+        
+        if negative_real_impedance_handling == 'clip':
+            real_impedance_at_beam_freq = np.clip(real_impedance_at_beam_freq, min=0, max=None)
+        elif negative_real_impedance_handling == 'abs':
+            real_impedance_at_beam_freq = np.abs(real_impedance_at_beam_freq)
+        elif negative_real_impedance_handling == 'ignore':
+            pass
+        else:
+            raise ValueError(f'Unknown handling of negative impedance real part: `{negative_real_impedance_handling}`')
 
         frequency_step = beam_freq[1] - beam_freq[0]
         max_step = ceil(max_frequency_shift / frequency_step)
         shift_steps = np.arange(-max_step, max_step + 1)
         power_losses = np.zeros_like(shift_steps, dtype=float) # W
 
-        impedance = np.interp(
-            x=beam_freq,
-            xp=impedance_frequency_array,
-            fp=impedance_value_array
-        )
-
         if not self.silent:
             print(f'Calculating shifted power losses for frequency shifts +/- {max_frequency_shift} Hz in steps of {frequency_step} Hz ({len(shift_steps)} steps)')
 
         for index, shift_step in enumerate(tqdm(shift_steps, disable=self.silent)):
-            shifted_impedance = np.roll(impedance, shift=shift_step)
+            shifted_impedance = np.roll(real_impedance_at_beam_freq, shift=shift_step)
             if shift_step < 0:
                 shifted_impedance[shift_step:] = 0
             elif shift_step > 0:
                 shifted_impedance[:shift_step] = 0
             with redirect_stdout(None):
-                power_losses[index] = self.get_power_loss(
-                    impedance_frequency_array=beam_freq,
-                    impedance_value_array=shifted_impedance,
-                    negative_real_impedance_handling=negative_real_impedance_handling
-                )
+                power_loss_spectrum = (
+                    2 * self.revolution_frequency**2
+                    * np.abs(beam_spectrum)**2 * shifted_impedance
+                ) # Hz^2 * C^2 * Ohm = W
+                power_losses[index] = float(np.sum(power_loss_spectrum)) # W
         
         return (
             frequency_step * shift_steps, # Hz
