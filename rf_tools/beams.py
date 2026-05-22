@@ -10,7 +10,7 @@ from typing import Literal, Sequence
 from .quantities import RealArray, ComplexArray
 
 
-def get_binomial_bunch_profile(
+def _get_binomial_bunch_profile(
     time_array: RealArray, # s
     length_4sigma: float, # s
     exponent: float,
@@ -27,7 +27,7 @@ def get_binomial_bunch_profile(
     return time_array, amplitude * profile # 1/s
 
 
-def get_gaussian_bunch_profile(
+def _get_gaussian_bunch_profile(
     time_array: RealArray, # s
     length_4sigma: float # s
 ) -> tuple[RealArray, RealArray]:
@@ -70,7 +70,7 @@ class Bunch:
         if self.distribution == 'binomial':
             if not self.binomial_exponent:
                 raise ValueError('Must specify binomial exponent (mu) for binomial bunch distribution')
-            _, profile = get_binomial_bunch_profile(
+            _, profile = _get_binomial_bunch_profile(
                 time_array=time_array,
                 length_4sigma=self.length_4sigma,
                 exponent=self.binomial_exponent
@@ -78,7 +78,7 @@ class Bunch:
         elif self.distribution == 'gaussian':
             if self.binomial_exponent is not None:
                 raise ValueError('Binomial exponent (mu) should not be specified for gaussian bunch distribution')
-            _, profile = get_gaussian_bunch_profile(
+            _, profile = _get_gaussian_bunch_profile(
                 time_array=time_array,
                 length_4sigma=self.length_4sigma
             )
