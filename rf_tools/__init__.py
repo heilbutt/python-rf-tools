@@ -24,7 +24,8 @@ from .quantities import (
 from .units import (
     TIME_UNITS,
     FREQUENCY_UNITS,
-    LENGTH_UNITS
+    LENGTH_UNITS,
+    format_quantity
 )
 
 __all__ = [
@@ -41,5 +42,6 @@ __all__ = [
     'ComplexQuantity',
     'TIME_UNITS',
     'FREQUENCY_UNITS',
-    'LENGTH_UNITS'
+    'LENGTH_UNITS',
+    'format_quantity'
 ]

@@ -11,6 +11,17 @@ PREFIXES: dict[str, float] = {
     'T' : 1e+12
 }
 
+
 TIME_UNITS = {key + 's': value for key, value in PREFIXES.items()}
 FREQUENCY_UNITS = {key + 'Hz': value for key, value in PREFIXES.items()}
 LENGTH_UNITS = {key + 'm': value for key, value in PREFIXES.items()}
+
+
+def format_quantity(
+    value: float,
+    unit: str = ''
+) -> str:
+    for prefix, multiplier in PREFIXES.items():
+        if abs(value) >= multiplier * 0.1 and abs(value) < multiplier * 1000:
+            return f'{value / multiplier:.3f} {prefix}{unit}'
+    return f'{value:.3e} {unit}'

@@ -4,6 +4,8 @@ from math import pi, gamma, sqrt, ceil
 from tqdm import tqdm
 from contextlib import redirect_stdout
 
+from .units import format_quantity
+
 from typing import Literal, Sequence
 from .quantities import RealArray, ComplexArray
 
@@ -110,7 +112,7 @@ class Bunch:
         frequency_array = np.fft.rfftfreq(len(profile), time_step)
 
         # Sanity checks
-        assert np.isclose(spectrum_array[0], self.charge, rtol=self.sanity_check_rtol), f'DC component of spectrum ({spectrum_array[0]}) not equal to bunch charge ({self.charge})'
+        assert np.isclose(spectrum_array[0], self.charge, rtol=self.sanity_check_rtol), f'DC component of spectrum {format_quantity(spectrum_array[0], "C")}) not equal to bunch charge {format_quantity(self.charge, "C")}'
         
         return (
             frequency_array, # Hz
@@ -265,8 +267,8 @@ class Beam:
         )
         assert len(beam_time_array) == len(beam_time_array_check), f'Number of samples in time array ({len(beam_time_array)}) and beam profile ({len(beam_profile)}) do not match'
         assert np.allclose(beam_time_array, beam_time_array_check, rtol=self.sanity_check_rtol), f'Samples in time array do not match expected values'
-        integrated_beam_current = np.trapezoid(beam_profile, beam_time_array)
-        assert np.isclose(integrated_beam_current, self.charge, rtol=self.sanity_check_rtol), f'Integral over beam profile ({integrated_beam_current} C) not equal to total beam charge ({self.charge} C)'
+        integrated_beam_current = float(np.trapezoid(beam_profile, beam_time_array))
+        assert np.isclose(integrated_beam_current, self.charge, rtol=self.sanity_check_rtol), f'Integral over beam profile {format_quantity(integrated_beam_current, "C")}) not equal to total beam charge {format_quantity(self.charge, "C")}'
 
         # store profile in cache
         self._cached_profile = (beam_time_array, beam_profile)
@@ -289,15 +291,15 @@ class Beam:
         time_step = beam_time_array[1] - beam_time_array[0]
 
         if not self.silent:
-            print(f'Computing beam spectrum: {len(beam_profile)} samples, frequency resolution {self.revolution_frequency} Hz')
-        
+            print(f'Computing beam spectrum: {len(beam_profile)} samples, frequency resolution {format_quantity(self.revolution_frequency, "Hz")}')
+
         # get beam spectrum
         spectrum_array = time_step * np.fft.rfft(beam_profile) # C
         frequency_array = np.fft.rfftfreq(len(beam_profile), time_step) # Hz
 
         # Sanity checks
-        assert np.isclose(spectrum_array[0], self.charge, rtol=self.sanity_check_rtol), f'DC component of spectrum ({spectrum_array[0]} C) not equal average beam charge ({self.charge} A)'
-        assert np.isclose(frequency_array[1]-frequency_array[0], self.revolution_frequency, rtol=self.sanity_check_rtol), f'Frequency resolution of spectrum ({frequency_array[1]-frequency_array[0]} Hz) does not match revolution frequency ({self.revolution_frequency} Hz)'
+        assert np.isclose(spectrum_array[0], self.charge, rtol=self.sanity_check_rtol), f'DC component of spectrum {format_quantity(spectrum_array[0], "C")}) not equal average beam charge {format_quantity(self.charge, "C")}'
+        assert np.isclose(frequency_array[1]-frequency_array[0], self.revolution_frequency, rtol=self.sanity_check_rtol), f'Frequency resolution of spectrum {format_quantity(frequency_array[1]-frequency_array[0], "Hz")}) does not match revolution frequency {format_quantity(self.revolution_frequency, "Hz")}'
 
         # write generated spectrum to cache
         self._cached_spectrum = (frequency_array, spectrum_array)
@@ -316,7 +318,7 @@ class Beam:
 
         max_impedance_delta_f = max(np.diff(impedance_frequency_array))
         if (max_impedance_delta_f > self.revolution_frequency) and not self.silent:
-            print(f'WARNING: Impedance frequency resolution ({max_impedance_delta_f} Hz) is coarser than revolution frequency ({self.revolution_frequency} Hz). This may lead to inaccurate results')
+            print(f'WARNING: Impedance frequency resolution {format_quantity(max_impedance_delta_f, "Hz")} is coarser than revolution frequency {format_quantity(self.revolution_frequency, "Hz")}. This may lead to inaccurate results')
         
         beam_freq, beam_spectrum = self.get_spectrum() # Hz, C
 
@@ -324,7 +326,7 @@ class Beam:
             (beam_freq[0] > impedance_frequency_array[0])
             or (beam_freq[-1] < impedance_frequency_array[-1])
         ) and not self.silent:
-            print(f'WARNING: Beam spectrum frequency range ({beam_freq[0]} - {beam_freq[-1]} Hz) does not cover impedance frequency range ({impedance_frequency_array[0]} - {impedance_frequency_array[-1]} Hz). This may lead to inaccurate results')
+            print(f'WARNING: Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(impedance_frequency_array[0], "Hz")} - {format_quantity(impedance_frequency_array[-1], "Hz")}. This may lead to inaccurate results')
 
         real_impedance_at_beam_freq = np.interp(
                 x=beam_freq,
@@ -390,7 +392,7 @@ class Beam:
             (beam_freq[0] > impedance_frequency_array[0])
             or (beam_freq[-1] < impedance_frequency_array[-1])
         ) and not self.silent:
-            print(f'WARNING: Beam spectrum frequency range ({beam_freq[0]} - {beam_freq[-1]} Hz) does not cover impedance frequency range ({impedance_frequency_array[0]} - {impedance_frequency_array[-1]} Hz). This may lead to inaccurate results')
+            print(f'WARNING: Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(impedance_frequency_array[0], "Hz")} - {format_quantity(impedance_frequency_array[-1], "Hz")}. This may lead to inaccurate results')
 
         real_impedance_at_beam_freq = np.interp(
                 x=beam_freq,
@@ -414,7 +416,7 @@ class Beam:
         power_losses = np.zeros_like(shift_steps, dtype=float) # W
 
         if not self.silent:
-            print(f'Calculating shifted power losses for frequency shifts +/- {max_frequency_shift} Hz in steps of {frequency_step} Hz ({len(shift_steps)} steps)')
+            print(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_frequency_shift, "Hz")} in steps of {format_quantity(frequency_step, "Hz")} ({len(shift_steps)} steps)')
 
         for index, shift_step in enumerate(tqdm(shift_steps, disable=self.silent)):
             shifted_impedance = np.roll(real_impedance_at_beam_freq, shift=shift_step)
@@ -428,6 +430,13 @@ class Beam:
                     * np.abs(beam_spectrum)**2 * shifted_impedance
                 ) # Hz^2 * C^2 * Ohm = W
                 power_losses[index] = float(np.sum(power_loss_spectrum)) # W
+
+        if not self.silent:
+            print(f'Power loss calculation results:')
+            print(f'  max:    {format_quantity(max(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmax(power_losses)] * frequency_step, "Hz"):>12}')
+            print(f'  min:    {format_quantity(min(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmin(power_losses)] * frequency_step, "Hz"):>12}')
+            print(f'  mean:   {format_quantity(float(np.mean(power_losses)), "W"):>12}')
+            print(f'  median: {format_quantity(float(np.median(power_losses)), "W"):>12}')
         
         return (
             frequency_step * shift_steps, # Hz
