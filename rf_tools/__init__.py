@@ -4,8 +4,6 @@ from .wakes_and_impedances import(
 )
 
 from .beams import (
-    get_binomial_bunch_profile,
-    get_gaussian_bunch_profile,
     Bunch,
     Beam
 )
@@ -32,8 +30,6 @@ from .units import (
 __all__ = [
     'LongitudinalResonator',
     'TransverseResonator',
-    'get_binomial_bunch_profile',
-    'get_gaussian_bunch_profile',
     'Bunch',
     'Beam',
     'get_quantity_from_cst_ascii',
