@@ -247,3 +247,16 @@ class ComplexQuantity:
     def interpolate_to(self, new_x: RealArray) -> ComplexQuantity:
         new_values = np.interp(x=new_x, xp=self.x, fp=self.value)
         return type(self)(new_x, new_values)
+
+
+def normalize(
+    array: RealArray,
+    minimum: float = 0,
+    maximum: float = 1
+) -> RealArray:
+
+    return minimum + (
+        (array - min(array))
+        * (maximum - minimum)
+        / (max(array) - min(array))
+    )
