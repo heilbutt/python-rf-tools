@@ -150,9 +150,10 @@ def get_quantity_from_cst_ascii(
     silent: bool = True,
 ) -> tuple[RealArray, RealArray | ComplexArray]:
 
-    # match lines in CST export against this to find parameters
+    # regular expressions to find header lines (no matter if with parameters or not)
+    header_line_pattern = re.compile(r'(^#Parameters|^#$)')
+    # regular expression to find parameter-value pairs
     parameters_pattern = re.compile(r'(\w+)\s*=\s*([-+]?\d+(?:\.\d+)?)')
-    no_parameters_pattern = re.compile(r'#$')
 
     # first, iterate over entire file without actually parsing,
     # this will also ensure that parameter filter is unambiguous
@@ -162,10 +163,7 @@ def get_quantity_from_cst_ascii(
     for line_number, line in enumerate(open(filename, 'r')):
         if not line.startswith('#'):
             continue # not a comment line
-        if not (
-            parameters_pattern.findall(line)
-            or no_parameters_pattern.match(line)
-        ):
+        if not header_line_pattern.match(line):
             continue # not a header line
         header_lines.append((line_number, line))
 
