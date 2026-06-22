@@ -2,7 +2,6 @@ import numpy as np
 from scipy.constants import c
 from math import pi, gamma, sqrt, ceil
 from tqdm import tqdm
-from contextlib import redirect_stdout
 
 from .units import format_quantity
 
@@ -418,18 +417,18 @@ class Beam:
         if not self.silent:
             print(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_frequency_shift, "Hz")} in steps of {format_quantity(frequency_step, "Hz")} ({len(shift_steps)} steps)')
 
+        # precompute for speed
+        squared_current = 2 * self.revolution_frequency**2 * np.abs(beam_spectrum)**2 # A^2
+
         for index, shift_step in enumerate(tqdm(shift_steps, disable=self.silent)):
             shifted_impedance = np.roll(real_impedance_at_beam_freq, shift=shift_step)
             if shift_step < 0:
                 shifted_impedance[shift_step:] = 0
             elif shift_step > 0:
                 shifted_impedance[:shift_step] = 0
-            with redirect_stdout(None):
-                power_loss_spectrum = (
-                    2 * self.revolution_frequency**2
-                    * np.abs(beam_spectrum)**2 * shifted_impedance
-                ) # Hz^2 * C^2 * Ohm = W
-                power_losses[index] = float(np.sum(power_loss_spectrum)) # W
+            power_losses[index] = float(
+                np.sum(squared_current * shifted_impedance) # A^2 * Ohm = W
+            )
 
         if not self.silent:
             print(f'Power loss calculation results:')
