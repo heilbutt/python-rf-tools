@@ -18,7 +18,8 @@ from .quantities import (
     RealArray,
     ComplexArray,
     RealQuantity,
-    ComplexQuantity
+    ComplexQuantity,
+    normalize
 )
 
 from .units import (
@@ -40,6 +41,7 @@ __all__ = [
     'ComplexArray',
     'RealQuantity',
     'ComplexQuantity',
+    'normalize',
     'TIME_UNITS',
     'FREQUENCY_UNITS',
     'LENGTH_UNITS',
