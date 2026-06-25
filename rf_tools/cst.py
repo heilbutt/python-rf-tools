@@ -1,11 +1,12 @@
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import numpy as np
 from itertools import islice
 
-from .units import TIME_UNITS, FREQUENCY_UNITS, LENGTH_UNITS
+from .units import PREFIXES
 
-from typing import Literal, Sequence, overload
+from typing import Literal, Iterable, overload
 from .quantities import RealArray, ComplexArray
 
 
@@ -46,85 +47,104 @@ def _parameters_are_close(
     return True
 
 
-@overload
-def _get_quantity_from_cst_ascii_lines(
-    lines: Sequence[str],
-    *,
-    is_complex: Literal[True] = ...,
-    convert_x_unit: bool = ...,
-    header_line_index: int = ...,
-) -> tuple[RealArray, ComplexArray]:
-    ...
+@dataclass
+class _BlockMetadata:
+    start_index: int # inclusive, 0-based
+    stop_index: int | None # exclusive, 0-based, None means EOF
+    header_lines: list[str]
 
-@overload
-def _get_quantity_from_cst_ascii_lines(
-    lines: Sequence[str],
-    *,
-    is_complex: Literal[False],
-    convert_x_unit: bool = ...,
-    header_line_index: int = ...,
-) -> tuple[RealArray, RealArray]:
-    ...
 
-def _get_quantity_from_cst_ascii_lines(
-    lines: Sequence[str],
-    is_complex: bool = True,
-    convert_x_unit: bool = True,
-    header_line_index: int = 1,
-) -> tuple[RealArray, RealArray | ComplexArray]:
+def _get_block_metadata_from_cst_ascii(
+    filename: Path | str,
+) -> list[_BlockMetadata]:
     
-    header_line = lines[header_line_index]
+    blocks: list[_BlockMetadata] = []
+    current_header_lines: list[str] = []
+    current_block_start: int | None = None
+    have_seen_data_in_current_block: bool = False
 
-    if convert_x_unit:
-        for unit_dict in [TIME_UNITS, FREQUENCY_UNITS, LENGTH_UNITS]:
-            unit_match = re.search('(' + '|'.join(unit_dict.keys()) + ')', header_line)
-            if unit_match:
-                x_unit_factor = unit_dict[unit_match.group(1)]
-                break
+    for line_number, line in enumerate(open(filename, 'r')):
+        if not line.startswith('#'):
+            # data line
+            have_seen_data_in_current_block = True
+            continue # not a comment line
 
-        else:
-            raise CstAsciiUnitParseError(f'Could not determine unit in header line `{header_line}`')
-        
-    else:
-        x_unit_factor = 1
+        # header line
+        if not have_seen_data_in_current_block:
+            current_header_lines.append(line)
+            if current_block_start is None:
+                current_block_start = line_number
+            continue
 
-    if is_complex: # complex quantity
+        # start of a new block, close the current block
+        if current_block_start is None:
+            raise CstAsciiParseError(f'Could not parse blocks in `{filename}`')
+        blocks.append(_BlockMetadata(
+            start_index=current_block_start,
+            stop_index=line_number,
+            header_lines=current_header_lines.copy()
+        ))
+        current_block_start = line_number
+        current_header_lines = [line]
+        have_seen_data_in_current_block = False
+
+    # close last block if file ended without a new header
+    if current_block_start is None:
+        raise CstAsciiParseError(f'Could not parse blocks in `{filename}`')
+    blocks.append(_BlockMetadata(
+        start_index=current_block_start,
+        stop_index=None,
+        header_lines=current_header_lines.copy()
+    ))
+
+    return blocks
+
+
+def _get_complex_quantity_from_cst_ascii_lines(
+    lines: Iterable[str],
+) -> tuple[RealArray, ComplexArray]:
+    
+    raw = np.loadtxt(lines, comments='#')
+
+    for line in lines:
+        if not line.startswith('#'):
+            continue
+
         # Try format Real-imaginary
-        header_match = re.search(r'(\[Re).*(\[Im)', header_line)
-        if header_match:
-            raw = np.loadtxt(lines, comments='#')
+        if re.search(r'(\[Re).*(\[Im)', line):
             return (
-                raw[:,0] * x_unit_factor,
+                raw[:,0],
                 raw[:,1] + 1j * raw[:,2]
             )
-        
+    
         # Try format Magnitude-phase
-        header_match = re.search(r'(\[Mag).*(\[Pha)', header_line)
-        if header_match:
-            raw = np.loadtxt(lines, comments='#')
+        if re.search(r'(\[Mag).*(\[Pha)', line):
             return (
-                raw[:,0] * x_unit_factor,
-                raw[:,1] * np.exp(1j * raw[:,2])
+                raw[:,0],
+                np.asarray(raw[:,1], dtype=complex) * np.exp(1j * raw[:,2])
             )
-    
-        raise CstAsciiParseError(f'Could not determine complex format. Is this a complex-valued export from CST?')
-    
-    else: # real quantity
-        raw = np.loadtxt(lines, comments='#')
-        return (
-            raw[:,0] * x_unit_factor,
-            raw[:,1]
-        )
 
+    raise CstAsciiParseError(f'Could not determine complex format. Is this a complex-valued export from CST?')
+    
+
+def _get_real_quantity_from_cst_ascii_lines(
+    lines: Iterable[str],
+) -> tuple[RealArray, RealArray]:
+
+    raw = np.loadtxt(lines, comments='#')
+    return (
+        raw[:,0],
+        raw[:,1]
+    )
+    
 
 @overload
 def get_quantity_from_cst_ascii(
     filename: Path | str,
-    *,
-    parameter_filter: dict[str, float] = ...,
     is_complex: Literal[True] = ...,
-    convert_x_unit: bool = ...,
-    header_line_index: int = ...,
+    parameter_filter: dict[str, float] = ...,
+    x_multiplier: float | str = ...,
+    y_multiplier: float | str = ...,
     silent: bool = ...,
 ) -> tuple[RealArray, ComplexArray]:
     ...
@@ -132,86 +152,90 @@ def get_quantity_from_cst_ascii(
 @overload
 def get_quantity_from_cst_ascii(
     filename: Path | str,
-    *,
-    parameter_filter: dict[str, float] = ...,
     is_complex: Literal[False],
-    convert_x_unit: bool = ...,
-    header_line_index: int = ...,
+    parameter_filter: dict[str, float] = ...,
+    x_multiplier: float | str = ...,
+    y_multiplier: float | str = ...,
     silent: bool = ...,
 ) -> tuple[RealArray, RealArray]:
     ...
 
 def get_quantity_from_cst_ascii(
     filename: Path | str,
-    parameter_filter: dict[str, float] = {},
     is_complex: bool = True,
-    convert_x_unit: bool = True,
-    header_line_index: int = 1,
+    parameter_filter: dict[str, float] = {},
+    x_multiplier: float | str = 1,
+    y_multiplier: float | str = 1,
     silent: bool = True,
 ) -> tuple[RealArray, RealArray | ComplexArray]:
-
-    # regular expressions to find header lines (no matter if with parameters or not)
-    header_line_pattern = re.compile(r'(^#Parameters|^#$)')
-    # regular expression to find parameter-value pairs
-    parameters_pattern = re.compile(r'(\w+)\s*=\s*([-+]?\d+(?:\.\d+)?)')
 
     # first, iterate over entire file without actually parsing,
     # this will also ensure that parameter filter is unambiguous
 
-    # collect header lines and their indices
-    header_lines: list[tuple[int, str]] = []
-    for line_number, line in enumerate(open(filename, 'r')):
-        if not line.startswith('#'):
-            continue # not a comment line
-        if not header_line_pattern.match(line):
-            continue # not a header line
-        header_lines.append((line_number, line))
-
-    block_slice_start: int | None = None
-    block_slice_end: int | None = None
+    blocks = _get_block_metadata_from_cst_ascii(filename)
+    if not silent:
+        print(f'Found {len(blocks)} data blocks, with the following line ranges (1-based, inclusive):')
+        for n, block in enumerate(blocks):
+            block_end_index = 'EOF' if block.stop_index is None else str(block.stop_index)
+            print(f'  Block {n+1:3d}: lines {block.start_index+1:6d} to {block_end_index:>6}')
 
     if not parameter_filter:
-        # if user specifies no parameter filter, there must be exactly one match
-        if not len(header_lines) == 1:
-            raise CstAsciiParseError(f'No parameter filter specified, but {len(header_lines)} blocks found in `{filename}`') 
-        # for islice, `None` indicated full range
-        block_slice_start = None
-        block_slice_end = None
+        # if user specifies no parameter filter, there must be exactly one block
+        if not len(blocks) == 1:
+            raise CstAsciiParseError(f'No parameter filter specified, but {len(blocks)} blocks found in `{filename}`') 
+        matching_block = blocks[0]
     else:
-        # if user specified parameter filter, there must be exactly one match
-        for n, (line_number, line) in enumerate(header_lines):
-            if _parameters_are_close(
-                parameter_filter,
-                {k: float(v) for k, v in parameters_pattern.findall(line)},
-                ensure_same_key_set=False
-            ):
-                if block_slice_start is not None:
-                    # already matched before
-                    raise CstAsciiParseError(f'Parameter filter `{parameter_filter}` is ambiguous, multiple matching headerlines found (at least) in line {block_slice_start} and line {line_number} in `{filename}`')
-                block_slice_start = line_number
+        # if user specified parameter filter, there must be exactly one matching block
+        # regular expression to find parameter-value pairs
+        pattern = re.compile(r'(\w+)\s*=\s*([-+]?\d+(?:\.\d+)?)')
+        
+        matching_blocks: list[_BlockMetadata] = []
+        for block in blocks:
+            for header_line in block.header_lines:
                 try:
-                    block_slice_end = header_lines[n+1][0]
-                except IndexError: # last block has no next header
-                    block_slice_end = None
+                    if _parameters_are_close(
+                        parameter_filter,
+                        {k: float(v) for k, v in pattern.findall(header_line)},
+                        ensure_same_key_set=False
+                    ):
+                        matching_blocks.append(block)
+                        break
+                except KeyError:
+                    continue
 
-        # raise error if no match at all
-        if block_slice_start is None:
-            raise CstAsciiParseError(f'Parameter filter `{parameter_filter}` delivered no matches in `{filename}`')
-                
+        if len(matching_blocks) > 1:
+            raise CstAsciiParseError(f'Parameter filter `{parameter_filter}` is ambiguous, multiple matching blocks found in `{filename}`')
+        if len(matching_blocks) < 1:
+             raise CstAsciiParseError(f'Parameter filter `{parameter_filter}` delivered no matches in `{filename}`')
+        matching_block = matching_blocks[0]
 
     # actually load content into memory and parse it
     with open(filename, 'r') as fp:
         # for itertools.islice, `None` means full range
-        block = list(islice(fp, block_slice_start, block_slice_end))
+        block_lines = list(islice(fp, matching_block.start_index, matching_block.stop_index))
     
     if not silent:
-        print(f'Found quantity, block has {len(block)} lines including headers.')
-        print(f'  First line: `{block[0][:50]} ...`')
-        print(f'  Last line:  `{block[-1][:50]} ...`')
+        print(f'Found quantity, block has {len(block_lines)} lines including headers')
+        print(f'  First line: `{block_lines[0][:50]} ...`')
+        print(f'  Last line:  `{block_lines[-1][:50]} ...`')
     
-    return _get_quantity_from_cst_ascii_lines(
-        lines=block,
-        is_complex=is_complex,
-        convert_x_unit=convert_x_unit,
-        header_line_index=header_line_index
+    if is_complex:
+        x, y = _get_complex_quantity_from_cst_ascii_lines(block_lines)
+    else:
+        x, y = _get_real_quantity_from_cst_ascii_lines(block_lines)
+
+    if isinstance(x_multiplier, str):
+        try:
+            x_multiplier = PREFIXES[x_multiplier]
+        except KeyError:
+            raise CstAsciiUnitParseError(f'Unknown x-axis multiplier `{x_multiplier}`')
+    if isinstance(y_multiplier, str):
+        try:
+            y_multiplier = PREFIXES[y_multiplier]
+        except KeyError:
+            raise CstAsciiUnitParseError(f'Unknown y-axis multiplier `{y_multiplier}`')
+        
+    return (
+        x * x_multiplier,
+        y * y_multiplier
     )
