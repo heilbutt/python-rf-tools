@@ -249,7 +249,7 @@ class ComplexQuantity:
         return type(self)(new_x, new_values)
 
 
-def normalize(
+def normalize_array(
     array: RealArray,
     minimum: float = 0,
     maximum: float = 1

@@ -1,4 +1,5 @@
-from .wakes_and_impedances import(
+from .wakes_and_impedances import (
+    get_impedance_from_wake_potential,
     LongitudinalResonator,
     TransverseResonator
 )
@@ -17,7 +18,7 @@ from .quantities import (
     ComplexArray,
     RealQuantity,
     ComplexQuantity,
-    normalize
+    normalize_array
 )
 
 from .units import (
@@ -28,6 +29,7 @@ from .units import (
 )
 
 __all__ = [
+    'get_impedance_from_wake_potential',
     'LongitudinalResonator',
     'TransverseResonator',
     'Bunch',
@@ -37,7 +39,7 @@ __all__ = [
     'ComplexArray',
     'RealQuantity',
     'ComplexQuantity',
-    'normalize',
+    'normalize_array',
     'TIME_UNITS',
     'FREQUENCY_UNITS',
     'LENGTH_UNITS',

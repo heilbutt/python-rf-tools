@@ -2,6 +2,59 @@ from math import pi, sqrt
 import numpy as np
 
 from .quantities import RealArray, ComplexArray
+from .beams import Bunch
+
+def get_impedance_from_wake_potential(
+    time_array: RealArray, # s
+    wake_potential: RealArray, # V/C/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
+    oversampling: float = 1,
+    bunch_length_sigma: float | None = None, # s
+    cutoff_by_bunch_sigma: float | None = None
+) -> tuple[RealArray, ComplexArray]:
+
+    dt = time_array[1] - time_array[0]
+    if not np.allclose(np.diff(time_array), dt):
+        raise ValueError('Time axis must be equidistant')
+
+    num_samples = int(len(time_array) * oversampling + 0.5)
+    frequency_array = np.fft.rfftfreq(num_samples, d=dt) # Hz
+    df = frequency_array[1] - frequency_array[0]
+
+    # convention: positive wake is decelerating -> positive impedance
+    impedance = np.fft.rfft(wake_potential, n=num_samples) * dt # Ohm/m^n
+
+    # correct for non-zero start time
+    impedance *= np.exp(-2j * pi * frequency_array * time_array[0]) 
+
+    # normalize by bunch spectrum if bunch length is provided
+    if bunch_length_sigma is not None:
+        bunch_frequency_array, bunch_spectrum = Bunch(
+            charge=1, # C
+            length_4sigma=bunch_length_sigma * 4, # s
+            distribution='gaussian'
+        ).get_spectrum(
+            max_frequency=max(frequency_array),
+            frequency_step=df
+        ) # 1
+
+        if not np.allclose(frequency_array, bunch_frequency_array):
+            raise ValueError('Frequency axis of computed impedance and bunch spectrum must match')
+
+        impedance /= bunch_spectrum # Ohm/m^n
+
+    # cutoff impedance by bunch sigma if requested
+    if cutoff_by_bunch_sigma is not None:
+        if bunch_length_sigma is None:
+            raise ValueError('Cannot cutoff by bunch sigma if `bunch_length_sigma` is not provided')
+
+        cutoff_sample = int(cutoff_by_bunch_sigma / df + 0.5)
+        frequency_array = frequency_array[:cutoff_sample]
+        impedance = impedance[:cutoff_sample]
+
+    return (
+        frequency_array, # Hz
+        impedance # Ohm/m^n
+    )
 
 
 class _Resonator:
