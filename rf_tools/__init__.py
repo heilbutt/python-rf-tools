@@ -1,5 +1,6 @@
 from .wakes_and_impedances import (
-    get_impedance_from_wake_potential,
+    get_impedance_from_wake,
+    get_wake_from_impedance,
     LongitudinalResonator,
     TransverseResonator
 )
@@ -29,7 +30,8 @@ from .units import (
 )
 
 __all__ = [
-    'get_impedance_from_wake_potential',
+    'get_impedance_from_wake',
+    'get_wake_from_impedance',
     'LongitudinalResonator',
     'TransverseResonator',
     'Bunch',

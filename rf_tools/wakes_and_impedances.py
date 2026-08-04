@@ -4,27 +4,27 @@ import numpy as np
 from .quantities import RealArray, ComplexArray
 from .beams import Bunch
 
-def get_impedance_from_wake_potential(
+def get_impedance_from_wake(
     time_array: RealArray, # s
-    wake_potential: RealArray, # V/C/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
-    oversampling: float = 1,
+    wake_array: RealArray, # V/C/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
+    oversampling_factor: float = 1,
     bunch_length_sigma: float | None = None, # s
-    cutoff_by_bunch_sigma: float | None = None
+    cutoff_by_bunch_sigma: float | None = None,
 ) -> tuple[RealArray, ComplexArray]:
 
     dt = time_array[1] - time_array[0]
     if not np.allclose(np.diff(time_array), dt):
         raise ValueError('Time axis must be equidistant')
 
-    num_samples = int(len(time_array) * oversampling + 0.5)
+    num_samples = int(len(time_array) * oversampling_factor)
     frequency_array = np.fft.rfftfreq(num_samples, d=dt) # Hz
     df = frequency_array[1] - frequency_array[0]
 
-    # convention: positive wake is decelerating -> positive impedance
-    impedance = np.fft.rfft(wake_potential, n=num_samples) * dt # Ohm/m^n
+    # convention: positive wake is decelerating <-> positive impedance
+    impedance_array = np.fft.rfft(wake_array, n=num_samples) * dt # Ohm/m^n
 
     # correct for non-zero start time
-    impedance *= np.exp(-2j * pi * frequency_array * time_array[0]) 
+    impedance_array *= np.exp(-2j * pi * frequency_array * time_array[0]) 
 
     # normalize by bunch spectrum if bunch length is provided
     if bunch_length_sigma is not None:
@@ -40,20 +40,47 @@ def get_impedance_from_wake_potential(
         if not np.allclose(frequency_array, bunch_frequency_array):
             raise ValueError('Frequency axis of computed impedance and bunch spectrum must match')
 
-        impedance /= bunch_spectrum # Ohm/m^n
+        impedance_array /= bunch_spectrum # Ohm/m^n
 
     # cutoff impedance by bunch sigma if requested
     if cutoff_by_bunch_sigma is not None:
         if bunch_length_sigma is None:
             raise ValueError('Cannot cutoff by bunch sigma if `bunch_length_sigma` is not provided')
 
-        cutoff_sample = int(cutoff_by_bunch_sigma / df + 0.5)
+        cutoff_sample = int(cutoff_by_bunch_sigma / df)
         frequency_array = frequency_array[:cutoff_sample]
-        impedance = impedance[:cutoff_sample]
+        impedance_array = impedance_array[:cutoff_sample]
 
     return (
         frequency_array, # Hz
-        impedance # Ohm/m^n
+        impedance_array # Ohm/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
+    )
+
+
+def get_wake_from_impedance(
+    frequency_array: RealArray, # Hz
+    impedance_array: ComplexArray, # Ohm/m^n
+) -> tuple[RealArray, RealArray]:
+
+    if not frequency_array[0] == 0:
+        raise ValueError('Frequency axis must start at 0 Hz and contain positive frequencies only')
+
+    df = frequency_array[1] - frequency_array[0]
+    if not np.allclose(np.diff(frequency_array), df):
+        raise ValueError('Frequency axis must be equidistant')
+
+    num_samples = len(frequency_array)
+    dt = 1 / (num_samples * df) # s
+    time_array = np.linspace(0, num_samples * dt, num_samples, endpoint=False) # s
+
+    # convention: positive wake is decelerating <-> positive impedance
+    wake_array = np.real(
+        np.fft.irfft(impedance_array, n=num_samples) * num_samples * df # V/C/m^n
+    )
+
+    return (
+        time_array, # s
+        wake_array # V/C/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
     )
 
 
