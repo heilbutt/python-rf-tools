@@ -141,7 +141,7 @@ def _get_real_quantity_from_cst_ascii_lines(
 @overload
 def get_quantity_from_cst_ascii(
     filename: Path | str,
-    is_complex: Literal[True] = ...,
+    is_complex: Literal[True],
     parameter_filter: dict[str, float] = ...,
     x_multiplier: float | str = ...,
     y_multiplier: float | str = ...,
@@ -162,7 +162,7 @@ def get_quantity_from_cst_ascii(
 
 def get_quantity_from_cst_ascii(
     filename: Path | str,
-    is_complex: bool = True,
+    is_complex: bool,
     parameter_filter: dict[str, float] = {},
     x_multiplier: float | str = 1,
     y_multiplier: float | str = 1,
