@@ -60,6 +60,7 @@ def get_impedance_from_wake(
 def get_wake_from_impedance(
     frequency_array: RealArray, # Hz
     impedance_array: ComplexArray, # Ohm/m^n
+    oversampling_factor: float = 1,
 ) -> tuple[RealArray, RealArray]:
 
     if not frequency_array[0] == 0:
@@ -69,7 +70,7 @@ def get_wake_from_impedance(
     if not np.allclose(np.diff(frequency_array), df):
         raise ValueError('Frequency axis must be equidistant')
 
-    num_samples = len(frequency_array)
+    num_samples = int(len(frequency_array) * oversampling_factor)
     dt = 1 / (num_samples * df) # s
     time_array = np.linspace(0, num_samples * dt, num_samples, endpoint=False) # s
 
