@@ -1,3 +1,4 @@
+from warnings import warn
 import numpy as np
 from scipy.constants import c
 from math import pi, gamma, sqrt, ceil
@@ -7,6 +8,9 @@ from .units import format_quantity
 
 from typing import Literal, Sequence
 from .quantities import RealArray, ComplexArray
+
+SANITY_CHECK: bool = False
+SANITY_CHECK_TOLERANCE = 1e-5
 
 
 def _get_binomial_bunch_profile(
@@ -46,15 +50,12 @@ class Bunch:
         length_4sigma: float, # s
         distribution: str,
         binomial_exponent: float | None = None,
-        sanity_check_rtol: float = 1e-5,
     ) -> None:
         
         self.distribution = distribution
         self.length_4sigma = length_4sigma
         self.charge = charge
         self.binomial_exponent = binomial_exponent
-
-        self.sanity_check_rtol = sanity_check_rtol
 
     @property
     def length_sigma(self) -> float:
@@ -85,8 +86,10 @@ class Bunch:
             raise ValueError(f'Unknown bunch distribution `{self.distribution}`')
         
         # Sanity checks
-        integral = np.trapezoid(profile, time_array)
-        assert np.isclose(integral, 1, rtol=self.sanity_check_rtol), f'Integral over `{self.distribution}` normalized bunch profile not equal to unity. Got {integral} instead'
+        if SANITY_CHECK:
+            integral = np.trapezoid(profile, time_array)
+            if not np.isclose(integral, 1, rtol=SANITY_CHECK_TOLERANCE):
+                warn(f'Integral over `{self.distribution}` normalized profile not equal to unity, got {integral} instead')
         
         return (
             time_array, # s
@@ -110,8 +113,9 @@ class Bunch:
         spectrum_array = np.fft.rfft(profile) * time_step
         frequency_array = np.fft.rfftfreq(len(profile), time_step)
 
-        # Sanity checks
-        assert np.isclose(spectrum_array[0], self.charge, rtol=self.sanity_check_rtol), f'DC component of spectrum {format_quantity(spectrum_array[0], "C")}) not equal to bunch charge {format_quantity(self.charge, "C")}'
+        if SANITY_CHECK:
+            if not np.isclose(spectrum_array[0], self.charge, rtol=SANITY_CHECK_TOLERANCE):
+                warn(f'DC component of spectrum {format_quantity(spectrum_array[0], 'C')}) not equal to bunch charge {format_quantity(self.charge, 'C')}')
         
         return (
             frequency_array, # Hz
@@ -131,7 +135,6 @@ class Beam:
         bunch_distribution: str,
         bunch_binomial_exponent: float | None = None,
         beta: float = 1.0,
-        sanity_check_rtol: float = 1e-5,
         silent: bool = False,
     ) -> None:
         
@@ -148,7 +151,6 @@ class Beam:
             raise NotImplementedError('Only relativistic beams with `beta` = 1 are currently supported')
         
         self.silent = silent
-        self.sanity_check_rtol = sanity_check_rtol
 
         self._cached_profile: tuple[RealArray, RealArray] | None = None
         self._cached_spectrum: tuple[RealArray, ComplexArray] | None = None
@@ -237,8 +239,7 @@ class Beam:
             charge=1,
             length_4sigma=self.bunch_length_4sigma,
             distribution=self.bunch_distribution,
-            binomial_exponent=self.bunch_binomial_exponent,
-            sanity_check_rtol=self.sanity_check_rtol
+            binomial_exponent=self.bunch_binomial_exponent
         ).get_profile(bunch_time_array) # A
 
         empty_profile = np.zeros_like(bunch_time_array)
@@ -257,17 +258,18 @@ class Beam:
         beam_profile = np.concatenate(bunch_profiles) # A
         beam_time_array = np.concatenate(bunch_time_arrays)
 
-        # Sanity checks
-        # time array of the entire beam 
-        beam_time_array_check = np.linspace(
-            start=-self.bucket_length/2,
-            stop=self.revolution_period - self.bucket_length/2,
-            num=self.harmonic_number * num_samples_per_bucket, endpoint=False
-        )
-        assert len(beam_time_array) == len(beam_time_array_check), f'Number of samples in time array ({len(beam_time_array)}) and beam profile ({len(beam_profile)}) do not match'
-        assert np.allclose(beam_time_array, beam_time_array_check, rtol=self.sanity_check_rtol), f'Samples in time array do not match expected values'
-        integrated_beam_current = float(np.trapezoid(beam_profile, beam_time_array))
-        assert np.isclose(integrated_beam_current, self.charge, rtol=self.sanity_check_rtol), f'Integral over beam profile {format_quantity(integrated_beam_current, "C")}) not equal to total beam charge {format_quantity(self.charge, "C")}'
+        if SANITY_CHECK:
+            # time array of the entire beam 
+            beam_time_array_check = np.linspace(
+                start=-self.bucket_length/2,
+                stop=self.revolution_period - self.bucket_length/2,
+                num=self.harmonic_number * num_samples_per_bucket, endpoint=False
+            )
+            assert len(beam_time_array) == len(beam_time_array_check), f'Number of samples in time array ({len(beam_time_array)}) and beam profile ({len(beam_profile)}) do not match'
+            assert np.allclose(beam_time_array, beam_time_array_check, rtol=SANITY_CHECK_TOLERANCE), f'Samples in time array do not match expected values'
+            integrated_beam_current = float(np.trapezoid(beam_profile, beam_time_array))
+            if not np.isclose(integrated_beam_current, self.charge, rtol=SANITY_CHECK_TOLERANCE):
+                warn(f'Integral over beam profile {format_quantity(integrated_beam_current, 'C')}) not equal to total beam charge {format_quantity(self.charge, 'C')}')
 
         # store profile in cache
         self._cached_profile = (beam_time_array, beam_profile)
@@ -297,8 +299,11 @@ class Beam:
         frequency_array = np.fft.rfftfreq(len(beam_profile), time_step) # Hz
 
         # Sanity checks
-        assert np.isclose(spectrum_array[0], self.charge, rtol=self.sanity_check_rtol), f'DC component of spectrum {format_quantity(spectrum_array[0], "C")}) not equal average beam charge {format_quantity(self.charge, "C")}'
-        assert np.isclose(frequency_array[1]-frequency_array[0], self.revolution_frequency, rtol=self.sanity_check_rtol), f'Frequency resolution of spectrum {format_quantity(frequency_array[1]-frequency_array[0], "Hz")}) does not match revolution frequency {format_quantity(self.revolution_frequency, "Hz")}'
+        if SANITY_CHECK:
+            if not np.isclose(spectrum_array[0], self.charge, rtol=SANITY_CHECK_TOLERANCE):
+                print(f'DC component of spectrum {format_quantity(spectrum_array[0], "C")}) not equal average beam charge {format_quantity(self.charge, "C")}')
+            if not np.isclose(frequency_array[1]-frequency_array[0], self.revolution_frequency, rtol=SANITY_CHECK_TOLERANCE):
+                print(f'Frequency resolution of spectrum {format_quantity(frequency_array[1]-frequency_array[0], "Hz")}) does not match revolution frequency {format_quantity(self.revolution_frequency, "Hz")}')
 
         # write generated spectrum to cache
         self._cached_spectrum = (frequency_array, spectrum_array)
@@ -349,9 +354,10 @@ class Beam:
         ) # Hz^2 * C^2 * Ohm = W
     
         # Sanity checks
-        num_negative = sum(power_loss_spectrum < 0)
-        if (num_negative > 0) and not self.silent:
-            print(f'WARNING: Power loss spectrum contains {num_negative} ({100 * num_negative / len(power_loss_spectrum):.1f} % of samples) negative values, likely because of negative real part of the impedance.')
+        if SANITY_CHECK:
+            num_negative = sum(power_loss_spectrum < 0)
+            if (num_negative > 0) and not self.silent:
+                warn(f'Power loss spectrum contains {num_negative} ({100 * num_negative / len(power_loss_spectrum):.1f} % of samples) negative values, likely because of negative real part of the impedance')
 
         return (
             beam_freq, # Hz
@@ -373,7 +379,8 @@ class Beam:
         power_loss = float(np.sum(power_loss_spectrum)) # W
 
         # Sanity checks
-        assert power_loss >= 0, f'Power loss should be non-negative, got {power_loss} W'
+        if SANITY_CHECK:
+            assert power_loss >= 0, f'Power loss should be non-negative, got {power_loss} W'
 
         return power_loss # W
     

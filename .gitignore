@@ -3,9 +3,12 @@
 
 examples/
 
+.venv/
 __pycache__/
 *.py[codz]
 *$py.class
 *.egg-info
 
 .sys.v*/
+
+.DS_Store

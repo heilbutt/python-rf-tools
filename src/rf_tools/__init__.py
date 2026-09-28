@@ -1,4 +1,4 @@
-from .wakes_and_impedances import (
+from .wake_impedance import (
     get_impedance_from_wake,
     get_wake_from_impedance,
     LongitudinalResonator,
