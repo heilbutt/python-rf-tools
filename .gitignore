@@ -5,6 +5,7 @@ examples/
 
 .venv/
 __pycache__/
+.pytest_cache/
 *.py[codz]
 *$py.class
 *.egg-info
