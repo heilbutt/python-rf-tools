@@ -15,11 +15,11 @@ SANITY_CHECK_TOLERANCE = 1e-5
 
 def _get_binomial_bunch_profile(
     time_array: RealArray, # s
-    length_4sigma: float, # s
+    sigma: float, # s
     exponent: float,
 ) -> tuple[RealArray, RealArray]:
 
-    full_bunch_length = length_4sigma * sqrt(3 + 2 * exponent) / 2
+    full_bunch_length = 4 * sigma * sqrt(3 + 2 * exponent) / 2
     amplitude = (
         2 * gamma(1.5 + exponent)
         / (full_bunch_length * sqrt(pi) * gamma(1 + exponent))
@@ -32,10 +32,9 @@ def _get_binomial_bunch_profile(
 
 def _get_gaussian_bunch_profile(
     time_array: RealArray, # s
-    length_4sigma: float # s
+    sigma: float # s
 ) -> tuple[RealArray, RealArray]:
 
-    sigma = length_4sigma / 4
     amplitude = 1 / (sigma * sqrt(2 * pi))
     profile = np.exp(-0.5 * (time_array / sigma) ** 2)
     
@@ -47,19 +46,15 @@ class Bunch:
     def __init__(
         self,
         charge: float, # C
-        length_4sigma: float, # s
-        distribution: str,
+        sigma: float, # s
+        distribution: Literal['gaussian', 'binomial'],
         binomial_exponent: float | None = None,
     ) -> None:
         
         self.distribution = distribution
-        self.length_4sigma = length_4sigma
+        self.sigma = sigma
         self.charge = charge
         self.binomial_exponent = binomial_exponent
-
-    @property
-    def length_sigma(self) -> float:
-        return self.length_4sigma / 4 # s
     
     def get_profile(
         self,
@@ -72,7 +67,7 @@ class Bunch:
                 raise ValueError('Must specify binomial exponent (mu) for binomial bunch distribution')
             _, profile = _get_binomial_bunch_profile(
                 time_array=time_array,
-                length_4sigma=self.length_4sigma,
+                sigma=self.sigma,
                 exponent=self.binomial_exponent
             )
         elif self.distribution == 'gaussian':
@@ -80,7 +75,7 @@ class Bunch:
                 raise ValueError('Binomial exponent (mu) should not be specified for gaussian bunch distribution')
             _, profile = _get_gaussian_bunch_profile(
                 time_array=time_array,
-                length_4sigma=self.length_4sigma
+                sigma=self.sigma
             )
         else:
             raise ValueError(f'Unknown bunch distribution `{self.distribution}`')
@@ -122,6 +117,33 @@ class Bunch:
             spectrum_array # C
         )
 
+    def get_loss_factor(
+        self,
+        time_array: RealArray, # s
+        wake_array: RealArray, # V/C/m^p
+    ) -> float:
+
+        dt = time_array[1] - time_array[0]
+        if not np.allclose(np.diff(time_array), dt):
+            raise ValueError('Time axis must be equidistant')
+
+        # extend wake time axis with zeros to cover at least +/- 5 sigma
+        extent = 5 * self.sigma # s
+        num_before = max(0, ceil((time_array[0] + extent) / dt))
+        num_after = max(0, ceil((extent - time_array[-1]) / dt))
+        time_array = time_array[0] + dt * np.arange(
+            -num_before, len(time_array) + num_after
+        ) # s
+        wake_potential = np.pad(wake_array, (num_before, num_after)) # V/C
+
+        _, profile = self.get_profile(time_array) # A
+        profile /= self.charge # 1/s
+
+        # convention: positive wake is decelerating <-> positive loss factor
+        loss_factor = float(np.trapezoid(profile * wake_potential, time_array))
+
+        return loss_factor # V/C/m^p, same unit as wake
+
 
 class Beam:
 
@@ -131,8 +153,8 @@ class Beam:
         max_frequency: float, # Hz
         filling_scheme: Sequence[bool],
         bunch_charge: float, # C
-        bunch_length_4sigma: float, # s
-        bunch_distribution: str,
+        bunch_sigma: float, # s
+        bunch_distribution: Literal['gaussian', 'binomial'],
         bunch_binomial_exponent: float | None = None,
         beta: float = 1.0,
         silent: bool = False,
@@ -144,7 +166,7 @@ class Beam:
             raise ValueError('Filling scheme must contain at least one filled bucket (`True`)')
         self._filling_scheme = filling_scheme
         self._bunch_charge = bunch_charge
-        self._bunch_length_4sigma = bunch_length_4sigma
+        self._bunch_sigma = bunch_sigma
         self._bunch_distribution = bunch_distribution
         self._bunch_binomial_exponent = bunch_binomial_exponent
         if beta != 1.0:
@@ -172,12 +194,8 @@ class Beam:
         return self._bunch_charge # C
     
     @property
-    def bunch_length_4sigma(self) -> float:
-        return self._bunch_length_4sigma # s
-    
-    @property
-    def bunch_length_sigma(self) -> float:
-        return self.bunch_length_4sigma / 4 # s
+    def bunch_sigma(self) -> float:
+        return self._bunch_sigma # s
     
     @property
     def bunch_distribution(self) -> str:
@@ -237,7 +255,7 @@ class Beam:
         # get profile of a bunch with unit charge
         _, unit_charge_bunch_profile = Bunch(
             charge=1,
-            length_4sigma=self.bunch_length_4sigma,
+            sigma=self.bunch_sigma,
             distribution=self.bunch_distribution,
             binomial_exponent=self.bunch_binomial_exponent
         ).get_profile(bunch_time_array) # A
