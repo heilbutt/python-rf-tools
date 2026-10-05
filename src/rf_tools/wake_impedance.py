@@ -1,14 +1,17 @@
 from math import pi, sqrt
 import numpy as np
+from scipy.signal import fftconvolve
+from scipy.constants import c
 
 from .quantities import RealArray, ComplexArray
 from .beams import Bunch
+
 
 def get_impedance_from_wake(
     time_array: RealArray, # s
     wake_array: RealArray, # V/C/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
     oversampling_factor: float = 1,
-    bunch_length_sigma: float | None = None, # s
+    bunch_sigma: float | None = None, # s
     cutoff_by_bunch_sigma: float | None = None,
 ) -> tuple[RealArray, ComplexArray]:
 
@@ -27,10 +30,10 @@ def get_impedance_from_wake(
     impedance_array *= np.exp(-2j * pi * frequency_array * time_array[0]) 
 
     # normalize by bunch spectrum if bunch length is provided
-    if bunch_length_sigma is not None:
+    if bunch_sigma is not None:
         bunch_frequency_array, bunch_spectrum = Bunch(
             charge=1, # C
-            length_4sigma=bunch_length_sigma * 4, # s
+            sigma=bunch_sigma, # s
             distribution='gaussian'
         ).get_spectrum(
             max_frequency=max(frequency_array),
@@ -44,7 +47,7 @@ def get_impedance_from_wake(
 
     # cutoff impedance by bunch sigma if requested
     if cutoff_by_bunch_sigma is not None:
-        if bunch_length_sigma is None:
+        if bunch_sigma is None:
             raise ValueError('Cannot cutoff by bunch sigma if `bunch_length_sigma` is not provided')
 
         cutoff_sample = int(cutoff_by_bunch_sigma / df)
@@ -82,6 +85,40 @@ def get_wake_from_impedance(
     return (
         time_array, # s
         wake_array # V/C/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
+    )
+
+
+def convolve_wake(
+    time_array: RealArray, # s
+    wake_array: RealArray, # V/C (typically)
+    target_bunch_sigma: float, # s
+    wake_bunch_sigma: float = 0 # s
+) -> RealArray:
+
+    dt = time_array[1] - time_array[0]
+    if not np.allclose(np.diff(time_array), dt):
+        raise ValueError('Time axis must be equidistant')
+
+    if not target_bunch_sigma > wake_bunch_sigma:
+        raise ValueError('Can only increase wake bunch length through convolution')
+
+    bunch = Bunch(
+        charge=1,
+        sigma=sqrt(target_bunch_sigma**2 - wake_bunch_sigma**2),
+        distribution='gaussian'
+    )
+    bunch_time_array, bunch_profile = bunch.get_profile(
+        np.arange(-5 * bunch.sigma, 5 * bunch.sigma + dt, dt)
+    )
+
+    # print(f'Convolving wake: input sigma = {wake_bunch_sigma*1e9:.2f} ns ({wake_bunch_sigma*c*1e3:.2f} mm), output sigma = {target_bunch_sigma*1e9:.2f} ns ({target_bunch_sigma*c*1e3:.2f} mm)')
+
+    w_convolved = fftconvolve(wake_array, bunch_profile, mode='full') * dt
+    t_convolved = time_array[0] + bunch_time_array[0] + np.arange(len(w_convolved)) * dt
+
+    return (
+        t_convolved, # s
+        w_convolved # V/C (same unit as wake array)
     )
 
 
