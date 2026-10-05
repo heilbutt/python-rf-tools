@@ -1,16 +1,26 @@
-from warnings import warn
 import numpy as np
 from scipy.constants import c
 from math import pi, gamma, sqrt, ceil
 from tqdm import tqdm
 
+from .config import settings
 from .units import format_quantity
+
+import logging
+logger = logging.getLogger(__name__) # rf_tools.beams
 
 from typing import Literal, Sequence
 from .quantities import RealArray, ComplexArray
 
-SANITY_CHECK: bool = False
-SANITY_CHECK_TOLERANCE = 1e-5
+__all__ = [
+    'Bunch',
+    'Beam',
+    'SanityCheckError'
+]
+
+
+class SanityCheckError(Exception):
+    pass
 
 
 def _get_binomial_bunch_profile(
@@ -81,10 +91,10 @@ class Bunch:
             raise ValueError(f'Unknown bunch distribution `{self.distribution}`')
         
         # Sanity checks
-        if SANITY_CHECK:
+        if settings.sanity_check:
             integral = np.trapezoid(profile, time_array)
-            if not np.isclose(integral, 1, rtol=SANITY_CHECK_TOLERANCE):
-                warn(f'Integral over `{self.distribution}` normalized profile not equal to unity, got {integral} instead')
+            if not np.isclose(integral, 1, rtol=settings.sanity_check_tolerance):
+                raise SanityCheckError(f'Integral over `{self.distribution}` normalized profile not equal to unity, got {integral} instead')
         
         return (
             time_array, # s
@@ -108,9 +118,9 @@ class Bunch:
         spectrum_array = np.fft.rfft(profile) * time_step
         frequency_array = np.fft.rfftfreq(len(profile), time_step)
 
-        if SANITY_CHECK:
-            if not np.isclose(spectrum_array[0], self.charge, rtol=SANITY_CHECK_TOLERANCE):
-                warn(f'DC component of spectrum {format_quantity(spectrum_array[0], 'C')}) not equal to bunch charge {format_quantity(self.charge, 'C')}')
+        if settings.sanity_check:
+            if not np.isclose(spectrum_array[0], self.charge, rtol=settings.sanity_check_tolerance):
+                raise SanityCheckError(f'DC component of spectrum {format_quantity(spectrum_array[0], 'C')}) not equal to bunch charge {format_quantity(self.charge, 'C')}')
         
         return (
             frequency_array, # Hz
@@ -156,8 +166,7 @@ class Beam:
         bunch_sigma: float, # s
         bunch_distribution: Literal['gaussian', 'binomial'],
         bunch_binomial_exponent: float | None = None,
-        beta: float = 1.0,
-        silent: bool = False,
+        beta: float = 1.0
     ) -> None:
         
         self._circumference = circumference
@@ -171,8 +180,6 @@ class Beam:
         self._bunch_binomial_exponent = bunch_binomial_exponent
         if beta != 1.0:
             raise NotImplementedError('Only relativistic beams with `beta` = 1 are currently supported')
-        
-        self.silent = silent
 
         self._cached_profile: tuple[RealArray, RealArray] | None = None
         self._cached_spectrum: tuple[RealArray, ComplexArray] | None = None
@@ -237,8 +244,7 @@ class Beam:
         
         # if cached profile exists, return it instead of calculating again
         if self._cached_profile is not None:
-            if not self.silent:
-                print(f'Using cached beam profile')
+            logger.info(f'Using cached beam profile')
             return self._cached_profile # (s, A)
 
         # generate time axis centered for one bucket (t = 0 at bucket center)
@@ -265,9 +271,11 @@ class Beam:
         # iterate over bunches to generate profile of entire beam
         bunch_profiles = []
         bunch_time_arrays = []
-        if not self.silent:
-            print(f'Generating beam profile: {self.harmonic_number} buckets ({self.num_bunches} filled), {num_samples_per_bucket} samples/bucket, {self.harmonic_number*num_samples_per_bucket} total samples')
-        for bucket_index, is_filled in enumerate(tqdm(self.filling_scheme, disable=self.silent)):
+
+        logger.info(f'Generating beam profile: {self.harmonic_number} buckets ({self.num_bunches} filled), {num_samples_per_bucket} samples/bucket, {self.harmonic_number*num_samples_per_bucket} total samples')
+        for bucket_index, is_filled in enumerate(
+            tqdm(self.filling_scheme, disable=not logger.isEnabledFor(logging.INFO))
+        ):
             bunch_time_arrays.append(bunch_time_array + bucket_index * self.bucket_length)
             if is_filled:
                 bunch_profiles.append(self.bunch_charge * unit_charge_bunch_profile)
@@ -276,18 +284,20 @@ class Beam:
         beam_profile = np.concatenate(bunch_profiles) # A
         beam_time_array = np.concatenate(bunch_time_arrays)
 
-        if SANITY_CHECK:
+        if settings.sanity_check:
             # time array of the entire beam 
             beam_time_array_check = np.linspace(
                 start=-self.bucket_length/2,
                 stop=self.revolution_period - self.bucket_length/2,
                 num=self.harmonic_number * num_samples_per_bucket, endpoint=False
             )
-            assert len(beam_time_array) == len(beam_time_array_check), f'Number of samples in time array ({len(beam_time_array)}) and beam profile ({len(beam_profile)}) do not match'
-            assert np.allclose(beam_time_array, beam_time_array_check, rtol=SANITY_CHECK_TOLERANCE), f'Samples in time array do not match expected values'
+            if not len(beam_time_array) == len(beam_time_array_check):
+                raise SanityCheckError(f'Number of samples in time array ({len(beam_time_array)}) and beam profile ({len(beam_profile)}) do not match')
+            if not np.allclose(beam_time_array, beam_time_array_check, rtol=settings.sanity_check_tolerance):
+                raise SanityCheckError(f'Samples in time array do not match expected values')
             integrated_beam_current = float(np.trapezoid(beam_profile, beam_time_array))
-            if not np.isclose(integrated_beam_current, self.charge, rtol=SANITY_CHECK_TOLERANCE):
-                warn(f'Integral over beam profile {format_quantity(integrated_beam_current, 'C')}) not equal to total beam charge {format_quantity(self.charge, 'C')}')
+            if not np.isclose(integrated_beam_current, self.charge, rtol=settings.sanity_check_tolerance):
+                raise SanityCheckError(f'Integral over beam profile {format_quantity(integrated_beam_current, 'C')}) not equal to total beam charge {format_quantity(self.charge, 'C')}')
 
         # store profile in cache
         self._cached_profile = (beam_time_array, beam_profile)
@@ -301,27 +311,25 @@ class Beam:
         
         # if cached spectrum exists, return it instead of calculating again
         if self._cached_spectrum is not None:
-            if not self.silent:
-                print(f'Using cached beam spectrum')
+            logger.info(f'Using cached beam spectrum')
             return self._cached_spectrum # (Hz, C)
         
         # get time-domain profile of entire beam
         beam_time_array, beam_profile = self.get_profile() # A
         time_step = beam_time_array[1] - beam_time_array[0]
 
-        if not self.silent:
-            print(f'Computing beam spectrum: {len(beam_profile)} samples, frequency resolution {format_quantity(self.revolution_frequency, "Hz")}')
+        logger.info(f'Computing beam spectrum: {len(beam_profile)} samples, frequency resolution {format_quantity(self.revolution_frequency, "Hz")}')
 
         # get beam spectrum
         spectrum_array = time_step * np.fft.rfft(beam_profile) # C
         frequency_array = np.fft.rfftfreq(len(beam_profile), time_step) # Hz
 
         # Sanity checks
-        if SANITY_CHECK:
-            if not np.isclose(spectrum_array[0], self.charge, rtol=SANITY_CHECK_TOLERANCE):
-                print(f'DC component of spectrum {format_quantity(spectrum_array[0], "C")}) not equal average beam charge {format_quantity(self.charge, "C")}')
-            if not np.isclose(frequency_array[1]-frequency_array[0], self.revolution_frequency, rtol=SANITY_CHECK_TOLERANCE):
-                print(f'Frequency resolution of spectrum {format_quantity(frequency_array[1]-frequency_array[0], "Hz")}) does not match revolution frequency {format_quantity(self.revolution_frequency, "Hz")}')
+        if settings.sanity_check:
+            if not np.isclose(spectrum_array[0], self.charge, rtol=settings.sanity_check_tolerance):
+                raise SanityCheckError(f'DC component of spectrum {format_quantity(spectrum_array[0], "C")}) not equal average beam charge {format_quantity(self.charge, "C")}')
+            if not np.isclose(frequency_array[1]-frequency_array[0], self.revolution_frequency, rtol=settings.sanity_check_tolerance):
+                raise SanityCheckError(f'Frequency resolution of spectrum {format_quantity(frequency_array[1]-frequency_array[0], "Hz")}) does not match revolution frequency {format_quantity(self.revolution_frequency, "Hz")}')
 
         # write generated spectrum to cache
         self._cached_spectrum = (frequency_array, spectrum_array)
@@ -339,16 +347,16 @@ class Beam:
     ) -> tuple[RealArray, RealArray]:
 
         max_impedance_delta_f = max(np.diff(impedance_frequency_array))
-        if (max_impedance_delta_f > self.revolution_frequency) and not self.silent:
-            print(f'WARNING: Impedance frequency resolution {format_quantity(max_impedance_delta_f, "Hz")} is coarser than revolution frequency {format_quantity(self.revolution_frequency, "Hz")}. This may lead to inaccurate results')
+        if (max_impedance_delta_f > self.revolution_frequency):
+            logger.warning(f'Impedance frequency resolution {format_quantity(max_impedance_delta_f, "Hz")} is coarser than revolution frequency {format_quantity(self.revolution_frequency, "Hz")}. This may lead to inaccurate results')
         
         beam_freq, beam_spectrum = self.get_spectrum() # Hz, C
 
         if (
             (beam_freq[0] > impedance_frequency_array[0])
             or (beam_freq[-1] < impedance_frequency_array[-1])
-        ) and not self.silent:
-            print(f'WARNING: Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(impedance_frequency_array[0], "Hz")} - {format_quantity(impedance_frequency_array[-1], "Hz")}. This may lead to inaccurate results')
+        ):
+            logger.warning(f'Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(impedance_frequency_array[0], "Hz")} - {format_quantity(impedance_frequency_array[-1], "Hz")}. This may lead to inaccurate results')
 
         real_impedance_at_beam_freq = np.interp(
                 x=beam_freq,
@@ -372,10 +380,10 @@ class Beam:
         ) # Hz^2 * C^2 * Ohm = W
     
         # Sanity checks
-        if SANITY_CHECK:
+        if settings.sanity_check:
             num_negative = sum(power_loss_spectrum < 0)
-            if (num_negative > 0) and not self.silent:
-                warn(f'Power loss spectrum contains {num_negative} ({100 * num_negative / len(power_loss_spectrum):.1f} % of samples) negative values, likely because of negative real part of the impedance')
+            if (num_negative > 0):
+                raise SanityCheckError(f'Power loss spectrum contains {num_negative} ({100*num_negative/len(power_loss_spectrum):.1f} % of samples) negative values, likely because of negative real part of the impedance')
 
         return (
             beam_freq, # Hz
@@ -397,8 +405,9 @@ class Beam:
         power_loss = float(np.sum(power_loss_spectrum)) # W
 
         # Sanity checks
-        if SANITY_CHECK:
-            assert power_loss >= 0, f'Power loss should be non-negative, got {power_loss} W'
+        if settings.sanity_check:
+            if power_loss < 0:
+                raise SanityCheckError(f'Power loss should be non-negative, got {power_loss} W')
 
         return power_loss # W
     
@@ -415,8 +424,8 @@ class Beam:
         if (
             (beam_freq[0] > impedance_frequency_array[0])
             or (beam_freq[-1] < impedance_frequency_array[-1])
-        ) and not self.silent:
-            print(f'WARNING: Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(impedance_frequency_array[0], "Hz")} - {format_quantity(impedance_frequency_array[-1], "Hz")}. This may lead to inaccurate results')
+        ):
+            logger.warning(f'Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(impedance_frequency_array[0], "Hz")} - {format_quantity(impedance_frequency_array[-1], "Hz")}. This may lead to inaccurate results')
 
         real_impedance_at_beam_freq = np.interp(
                 x=beam_freq,
@@ -439,13 +448,14 @@ class Beam:
         shift_steps = np.arange(-max_step, max_step + 1)
         power_losses = np.zeros_like(shift_steps, dtype=float) # W
 
-        if not self.silent:
-            print(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_frequency_shift, "Hz")} in steps of {format_quantity(frequency_step, "Hz")} ({len(shift_steps)} steps)')
+        logger.info(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_frequency_shift, "Hz")} in steps of {format_quantity(frequency_step, "Hz")} ({len(shift_steps)} steps)')
 
         # precompute for speed
         squared_current = 2 * self.revolution_frequency**2 * np.abs(beam_spectrum)**2 # A^2
 
-        for index, shift_step in enumerate(tqdm(shift_steps, disable=self.silent)):
+        for index, shift_step in enumerate(
+            tqdm(shift_steps, disable=not logger.isEnabledFor(logging.INFO))
+        ):
             shifted_impedance = np.roll(real_impedance_at_beam_freq, shift=shift_step)
             if shift_step < 0:
                 shifted_impedance[shift_step:] = 0
@@ -455,12 +465,11 @@ class Beam:
                 np.sum(squared_current * shifted_impedance) # A^2 * Ohm = W
             )
 
-        if not self.silent:
-            print(f'Power loss calculation results:')
-            print(f'  max:    {format_quantity(max(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmax(power_losses)] * frequency_step, "Hz"):>12}')
-            print(f'  min:    {format_quantity(min(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmin(power_losses)] * frequency_step, "Hz"):>12}')
-            print(f'  mean:   {format_quantity(float(np.mean(power_losses)), "W"):>12}')
-            print(f'  median: {format_quantity(float(np.median(power_losses)), "W"):>12}')
+        logger.info(f'Power loss calculation results:')
+        logger.info(f'  max:    {format_quantity(max(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmax(power_losses)] * frequency_step, "Hz"):>12}')
+        logger.info(f'  min:    {format_quantity(min(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmin(power_losses)] * frequency_step, "Hz"):>12}')
+        logger.info(f'  mean:   {format_quantity(float(np.mean(power_losses)), "W"):>12}')
+        logger.info(f'  median: {format_quantity(float(np.median(power_losses)), "W"):>12}')
         
         return (
             frequency_step * shift_steps, # Hz

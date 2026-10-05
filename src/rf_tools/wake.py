@@ -6,6 +6,17 @@ from scipy.constants import c
 from .quantities import RealArray, ComplexArray
 from .beams import Bunch
 
+import logging
+logger = logging.getLogger(__name__) # rf_tools.wake
+
+__all__ = [
+    'get_impedance_from_wake',
+    'get_wake_from_impedance',
+    'convolve_wake',
+    'LongitudinalResonator',
+    'TransverseResonator'
+]
+
 
 def get_impedance_from_wake(
     time_array: RealArray, # s
@@ -111,7 +122,7 @@ def convolve_wake(
         np.arange(-5 * bunch.sigma, 5 * bunch.sigma + dt, dt)
     )
 
-    # print(f'Convolving wake: input sigma = {wake_bunch_sigma*1e9:.2f} ns ({wake_bunch_sigma*c*1e3:.2f} mm), output sigma = {target_bunch_sigma*1e9:.2f} ns ({target_bunch_sigma*c*1e3:.2f} mm)')
+    logger.info(f'Convolving wake: input sigma = {wake_bunch_sigma*1e9:.2f} ns ({wake_bunch_sigma*c*1e3:.2f} mm), output sigma = {target_bunch_sigma*1e9:.2f} ns ({target_bunch_sigma*c*1e3:.2f} mm)')
 
     w_convolved = fftconvolve(wake_array, bunch_profile, mode='full') * dt
     t_convolved = time_array[0] + bunch_time_array[0] + np.arange(len(w_convolved)) * dt
@@ -180,7 +191,7 @@ class LongitudinalResonator(_Resonator):
         
         # Zotter 5.1.1
         if self.omega_r * bunch_length_sigma > 0.1:
-            print(f'WARNING: Loss factor calculation valid for short bunches with omega_r * bunch_sigma << 1, but got {self.omega_r * bunch_length_sigma:.2f}')
+            logger.warn(f'Loss factor calculation valid for short bunches with omega_r * bunch_sigma << 1, but got {self.omega_r * bunch_length_sigma:.2f}')
 
         return self.omega_r / 2 * self.R_over_Q * (
             1 - 2 / pi * self.omega_r * bunch_length_sigma / self.quality_factor

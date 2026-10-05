@@ -6,8 +6,17 @@ from itertools import islice
 
 from .units import PREFIXES
 
+import logging
+logger = logging.getLogger(__name__) # rf_tools.cst
+
 from typing import Literal, Iterable, overload
 from .quantities import RealArray, ComplexArray
+
+__all__ = [
+    'get_quantity_from_cst_ascii',
+    'CstAsciiParseError',
+    'CstAsciiUnitParseError'
+]
 
 
 class CstAsciiParseError(Exception):
@@ -145,7 +154,6 @@ def get_quantity_from_cst_ascii(
     parameter_filter: dict[str, float] = ...,
     x_multiplier: float | str = ...,
     y_multiplier: float | str = ...,
-    silent: bool = ...,
 ) -> tuple[RealArray, ComplexArray]:
     ...
     
@@ -156,7 +164,6 @@ def get_quantity_from_cst_ascii(
     parameter_filter: dict[str, float] = ...,
     x_multiplier: float | str = ...,
     y_multiplier: float | str = ...,
-    silent: bool = ...,
 ) -> tuple[RealArray, RealArray]:
     ...
 
@@ -166,18 +173,16 @@ def get_quantity_from_cst_ascii(
     parameter_filter: dict[str, float] = {},
     x_multiplier: float | str = 1,
     y_multiplier: float | str = 1,
-    silent: bool = True,
 ) -> tuple[RealArray, RealArray | ComplexArray]:
 
     # first, iterate over entire file without actually parsing,
     # this will also ensure that parameter filter is unambiguous
 
     blocks = _get_block_metadata_from_cst_ascii(filename)
-    if not silent:
-        print(f'Found {len(blocks)} data blocks, with the following line ranges (1-based, inclusive):')
-        for n, block in enumerate(blocks):
-            block_end_index = 'EOF' if block.stop_index is None else str(block.stop_index)
-            print(f'  Block {n+1:3d}: lines {block.start_index+1:6d} to {block_end_index:>6}')
+    logger.debug(f'Found {len(blocks)} data blocks, with the following line ranges (1-based, inclusive):')
+    for n, block in enumerate(blocks):
+        block_end_index = 'EOF' if block.stop_index is None else str(block.stop_index)
+        logger.debug(f'  Block {n+1:3d}: lines {block.start_index+1:6d} to {block_end_index:>6}')
 
     if not parameter_filter:
         # if user specifies no parameter filter, there must be exactly one block
@@ -214,10 +219,9 @@ def get_quantity_from_cst_ascii(
         # for itertools.islice, `None` means full range
         block_lines = list(islice(fp, matching_block.start_index, matching_block.stop_index))
     
-    if not silent:
-        print(f'Found quantity, block has {len(block_lines)} lines including headers')
-        print(f'  First line: `{block_lines[0][:50]} ...`')
-        print(f'  Last line:  `{block_lines[-1][:50]} ...`')
+    logger.debug(f'Found quantity, block has {len(block_lines)} lines including headers')
+    logger.debug(f'  First line: `{block_lines[0][:50]} ...`')
+    logger.debug(f'  Last line:  `{block_lines[-1][:50]} ...`')
     
     if is_complex:
         x, y = _get_complex_quantity_from_cst_ascii_lines(block_lines)
