@@ -9,8 +9,8 @@ __all__ = [
 
 @dataclass(slots=True) # slots prevent accidental creating of new attributes
 class _Settings:
-    sanity_check: bool = False
-    sanity_check_tolerance: float = 1e-5
+    sanity_check: bool = True
+    sanity_check_tolerance: float = 1e-3
 
 settings = _Settings()
 

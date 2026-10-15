@@ -166,14 +166,22 @@ class Beam:
         bunch_sigma: float, # s
         bunch_distribution: Literal['gaussian', 'binomial'],
         bunch_binomial_exponent: float | None = None,
-        beta: float = 1.0
+        beta: float = 1.0,
+        harmonic_number_validation: int | None = None,
+        num_bunches_validation: int | None = None
     ) -> None:
         
         self._circumference = circumference
         self._max_frequency = max_frequency
+        
         if not any(filling_scheme):
             raise ValueError('Filling scheme must contain at least one filled bucket (`True`)')
-        self._filling_scheme = filling_scheme
+        if harmonic_number_validation and (harmonic_number_validation != len(filling_scheme)):
+            raise ValueError('Filling scheme validation: length does not correspond to harmonic number')
+        if num_bunches_validation and (num_bunches_validation != sum(filling_scheme)):
+            raise ValueError('Filling scheme validation: sum does not correspond to number of bunches')
+        self._filling_scheme = list(filling_scheme) # creates copy to avoid accidental modification
+        
         self._bunch_charge = bunch_charge
         self._bunch_sigma = bunch_sigma
         self._bunch_distribution = bunch_distribution
@@ -244,7 +252,7 @@ class Beam:
         
         # if cached profile exists, return it instead of calculating again
         if self._cached_profile is not None:
-            logger.info(f'Using cached beam profile')
+            logger.debug(f'Using cached beam profile')
             return self._cached_profile # (s, A)
 
         # generate time axis centered for one bucket (t = 0 at bucket center)
@@ -311,7 +319,7 @@ class Beam:
         
         # if cached spectrum exists, return it instead of calculating again
         if self._cached_spectrum is not None:
-            logger.info(f'Using cached beam spectrum')
+            logger.debug(f'Using cached beam spectrum')
             return self._cached_spectrum # (Hz, C)
         
         # get time-domain profile of entire beam
@@ -341,27 +349,27 @@ class Beam:
     
     def get_power_loss_spectrum(
         self,
-        impedance_frequency_array: RealArray, # Hz
-        impedance_value_array: ComplexArray, # Ohm
-        negative_real_impedance_handling: Literal['ignore', 'clip', 'abs'] = 'ignore'
+        frequency_array: RealArray, # Hz
+        impedance_array: ComplexArray, # Ohm
+        negative_real_impedance_handling: Literal['clip', 'abs', 'raise'] = 'clip'
     ) -> tuple[RealArray, RealArray]:
 
-        max_impedance_delta_f = max(np.diff(impedance_frequency_array))
+        max_impedance_delta_f = max(np.diff(frequency_array))
         if (max_impedance_delta_f > self.revolution_frequency):
             logger.warning(f'Impedance frequency resolution {format_quantity(max_impedance_delta_f, "Hz")} is coarser than revolution frequency {format_quantity(self.revolution_frequency, "Hz")}. This may lead to inaccurate results')
         
         beam_freq, beam_spectrum = self.get_spectrum() # Hz, C
 
         if (
-            (beam_freq[0] > impedance_frequency_array[0])
-            or (beam_freq[-1] < impedance_frequency_array[-1])
+            (beam_freq[0] > frequency_array[0])
+            or (beam_freq[-1] < frequency_array[-1])
         ):
-            logger.warning(f'Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(impedance_frequency_array[0], "Hz")} - {format_quantity(impedance_frequency_array[-1], "Hz")}. This may lead to inaccurate results')
+            logger.warning(f'Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(frequency_array[0], "Hz")} - {format_quantity(frequency_array[-1], "Hz")}. This may lead to inaccurate results')
 
         real_impedance_at_beam_freq = np.interp(
                 x=beam_freq,
-                xp=impedance_frequency_array,
-                fp=np.real(impedance_value_array),
+                xp=frequency_array,
+                fp=np.real(impedance_array),
                 left=0.0, right=0.0
         )
         
@@ -375,12 +383,12 @@ class Beam:
             raise ValueError(f'Unknown handling of negative impedance real part: `{negative_real_impedance_handling}`')
 
         power_loss_spectrum = (
-            2 * self.revolution_frequency**2
+            self.revolution_frequency**2
             * np.abs(beam_spectrum)**2 * real_impedance_at_beam_freq
         ) # Hz^2 * C^2 * Ohm = W
     
         # Sanity checks
-        if settings.sanity_check:
+        if settings.sanity_check and (negative_real_impedance_handling == 'raise'):
             num_negative = sum(power_loss_spectrum < 0)
             if (num_negative > 0):
                 raise SanityCheckError(f'Power loss spectrum contains {num_negative} ({100*num_negative/len(power_loss_spectrum):.1f} % of samples) negative values, likely because of negative real part of the impedance')
@@ -392,17 +400,17 @@ class Beam:
 
     def get_power_loss(
         self,
-        impedance_frequency_array: RealArray, # Hz
-        impedance_value_array: ComplexArray, # Ohm
-        negative_real_impedance_handling: Literal['ignore', 'clip', 'abs'] = 'ignore',
+        frequency_array: RealArray, # Hz
+        impedance_array: ComplexArray, # Ohm
+        negative_real_impedance_handling: Literal['clip', 'abs', 'raise'] = 'clip',
     ) -> float:
 
         _, power_loss_spectrum = self.get_power_loss_spectrum(
-            impedance_frequency_array=impedance_frequency_array,
-            impedance_value_array=impedance_value_array,
+            frequency_array=frequency_array,
+            impedance_array=impedance_array,
             negative_real_impedance_handling=negative_real_impedance_handling
         ) # W
-        power_loss = float(np.sum(power_loss_spectrum)) # W
+        power_loss = 2 * float(np.sum(power_loss_spectrum)) # W
 
         # Sanity checks
         if settings.sanity_check:
@@ -413,25 +421,25 @@ class Beam:
     
     def get_shifted_power_loss(
         self,
-        impedance_frequency_array: RealArray, # Hz
-        impedance_value_array: ComplexArray, # Ohm
+        frequency_array: RealArray, # Hz
+        value_array: ComplexArray, # Ohm
         max_frequency_shift: float, # Hz
-        negative_real_impedance_handling: Literal['ignore', 'clip', 'abs'] = 'ignore'
+        negative_real_impedance_handling: Literal['clip', 'abs', 'raise'] = 'clip'
     ) -> tuple[RealArray, RealArray]:
 
         beam_freq, beam_spectrum = self.get_spectrum() # Hz, C
 
         if (
-            (beam_freq[0] > impedance_frequency_array[0])
-            or (beam_freq[-1] < impedance_frequency_array[-1])
+            (beam_freq[0] > frequency_array[0])
+            or (beam_freq[-1] < frequency_array[-1])
         ):
-            logger.warning(f'Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(impedance_frequency_array[0], "Hz")} - {format_quantity(impedance_frequency_array[-1], "Hz")}. This may lead to inaccurate results')
+            logger.warning(f'Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(frequency_array[0], "Hz")} - {format_quantity(frequency_array[-1], "Hz")}. This may lead to inaccurate results')
 
         real_impedance_at_beam_freq = np.interp(
-                x=beam_freq,
-                xp=impedance_frequency_array,
-                fp=np.real(impedance_value_array),
-                left=0.0, right=0.0
+            x=beam_freq,
+            xp=frequency_array,
+            fp=np.real(value_array),
+            left=0.0, right=0.0
         )
         
         if negative_real_impedance_handling == 'clip':
@@ -451,7 +459,7 @@ class Beam:
         logger.info(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_frequency_shift, "Hz")} in steps of {format_quantity(frequency_step, "Hz")} ({len(shift_steps)} steps)')
 
         # precompute for speed
-        squared_current = 2 * self.revolution_frequency**2 * np.abs(beam_spectrum)**2 # A^2
+        squared_current = self.revolution_frequency**2 * np.abs(beam_spectrum)**2 # A^2
 
         for index, shift_step in enumerate(
             tqdm(shift_steps, disable=not logger.isEnabledFor(logging.INFO))
@@ -461,7 +469,8 @@ class Beam:
                 shifted_impedance[shift_step:] = 0
             elif shift_step > 0:
                 shifted_impedance[:shift_step] = 0
-            power_losses[index] = float(
+            
+            power_losses[index] = 2 * float(
                 np.sum(squared_current * shifted_impedance) # A^2 * Ohm = W
             )
 
