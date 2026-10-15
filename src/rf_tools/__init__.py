@@ -2,16 +2,16 @@ import logging
 logging.getLogger('rf_tools').addHandler(logging.NullHandler())
 
 # each submodule declares its public names in its own `__all__`
-from . import beams, cst, utils, units, wake
+from . import beam, cst, utils, units, wake
 
-from .beams import *
+from .beam import *
 from .cst import *
 from .utils import *
 from .units import *
 from .wake import *
 
 __all__: list[str] = []
-__all__ += beams.__all__
+__all__ += beam.__all__
 __all__ += cst.__all__
 __all__ += utils.__all__
 __all__ += units.__all__

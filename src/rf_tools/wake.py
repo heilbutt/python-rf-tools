@@ -5,7 +5,7 @@ from scipy.constants import c
 import warnings
 
 from .utils import Real1dArray, Complex1dArray, AccuracyWarning, _get_uniform_step
-from .beams import Bunch
+from .beam import GaussianBunch
 
 import logging
 logger = logging.getLogger(__name__) # rf_tools.wake
@@ -35,7 +35,6 @@ def get_impedance_from_wake(
     # even number of samples, so that `get_wake_from_impedance` is the exact inverse
     num_samples = 2 * ceil(len(time_array) * oversampling_factor / 2)
     frequency_array = np.fft.rfftfreq(num_samples, d=dt) # Hz
-    df = frequency_array[1] - frequency_array[0]
 
     # convention: positive wake is decelerating <-> positive impedance
     impedance_array = np.fft.rfft(wake_array, n=num_samples) * dt # Ohm/m^n
@@ -56,20 +55,7 @@ def get_impedance_from_wake(
 
     # normalize by bunch spectrum if bunch length is provided
     if bunch_sigma is not None:
-        bunch_frequency_array, bunch_spectrum = Bunch(
-            charge=1, # C
-            sigma=bunch_sigma, # s
-            distribution='gaussian'
-        ).get_spectrum(
-            max_frequency=1 / (2 * dt),
-            frequency_step=df
-        ) # 1
-
-        num_frequencies = len(frequency_array)
-        if not np.allclose(frequency_array, bunch_frequency_array[:num_frequencies]):
-            raise ValueError('Frequency axis of computed impedance and bunch spectrum must match')
-
-        impedance_array /= bunch_spectrum[:num_frequencies] # Ohm/m^n
+        impedance_array /= GaussianBunch(charge=1, sigma=bunch_sigma).get_form_factor(frequency_array) # Ohm/m^n
 
     return (
         frequency_array, # Hz
@@ -118,10 +104,9 @@ def convolve_wake(
     if not target_bunch_sigma > wake_bunch_sigma:
         raise ValueError('Can only increase wake bunch length through convolution')
 
-    bunch = Bunch(
+    bunch = GaussianBunch(
         charge=1,
-        sigma=sqrt(target_bunch_sigma**2 - wake_bunch_sigma**2),
-        distribution='gaussian'
+        sigma=sqrt(target_bunch_sigma**2 - wake_bunch_sigma**2)
     )
     bunch._check_sampling(time_step=dt)
     bunch_time_array = bunch._get_internal_time_array(time_step=dt)

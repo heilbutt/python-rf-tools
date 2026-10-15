@@ -5,7 +5,7 @@ import pytest
 from scipy.integrate import quad
 from scipy.special import erf
 
-from rf_tools.beams import Bunch
+from rf_tools.beam import GaussianBunch
 from rf_tools.utils import AccuracyWarning
 from rf_tools.wake import (
     LongitudinalResonator, TransverseResonator, convolve_wake,
@@ -135,7 +135,7 @@ def test_gaussian_loss_factor_time_and_frequency_domain_agree():
     t = wake_time_axis(r)
     wake = r.get_wake_function(t)
     t_potential, wake_potential = convolve_wake(t, wake, target_bunch_sigma=sigma)
-    k_time = Bunch(1, sigma, 'gaussian').get_loss_factor(t_potential, wake_potential)
+    k_time = GaussianBunch(1, sigma).get_loss_factor(t_potential, wake_potential)
 
     assert k_time == pytest.approx(k_frequency, rel=1e-6)
     # short-bunch approximation is still close, slightly beyond its validity (omega_r * sigma = 0.13)
@@ -213,7 +213,10 @@ def test_impedance_from_wake_potential_normalized_by_bunch_spectrum():
     t = wake_time_axis(r)
     wake = r.get_wake_function(t)
     t_potential, wake_potential = convolve_wake(t, wake, target_bunch_sigma=sigma)
-    f, impedance = get_impedance_from_wake(t_potential, wake_potential, bunch_sigma=sigma)
+    # cutoff removes frequencies where the bunch spectrum vanishes
+    f, impedance = get_impedance_from_wake(
+        t_potential, wake_potential, bunch_sigma=sigma, cutoff_by_bunch_sigma=4
+    )
     expected = r.get_impedance(f)
     band = (f > 0.1 * F_R) & (f < 5 * F_R)
     np.testing.assert_allclose(impedance[band], expected[band], atol=1e-3 * R_SHUNT)
