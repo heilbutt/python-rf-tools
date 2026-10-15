@@ -13,6 +13,16 @@ dependencies = [
     "tqdm>=4.70.1",
 ]
 
+[tool.pyrefly]
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]
+
+[tool.pytest.ini_options]
+# any unexpected warning (e.g. `AccuracyWarning` from too coarse sampling) fails the test
+filterwarnings = ["error"]
+
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
@@ -20,4 +30,6 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "scipy-stubs>=1.18.1.1",
+    "types-tqdm>=4.70.0.20260906",
 ]

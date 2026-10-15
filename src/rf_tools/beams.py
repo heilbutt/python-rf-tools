@@ -1,54 +1,67 @@
 import numpy as np
 from scipy.constants import c
+from scipy.special import betainc, betaincinv, erfc, erfcinv, jv
 from math import pi, gamma, sqrt, ceil
 from tqdm import tqdm
+import warnings
 
-from .config import settings
 from .units import format_quantity
 
 import logging
 logger = logging.getLogger(__name__) # rf_tools.beams
 
-from typing import Literal, Sequence
-from .quantities import RealArray, ComplexArray
+from typing import Literal, Sequence, TypeAlias
+from .utils import Real1dArray, Complex1dArray, AccuracyWarning, _get_uniform_step
 
 __all__ = [
     'Bunch',
     'Beam',
-    'SanityCheckError'
+    'NegativeImpedanceHandling'
 ]
 
+NegativeImpedanceHandling: TypeAlias = Literal['clip', 'abs', 'raise', 'ignore']
 
-class SanityCheckError(Exception):
-    pass
+# thresholds for `AccuracyWarning`, relative to the bunch spectrum at DC and the bunch charge
+_MAX_FORM_FACTOR = 1e-3 # neglected bunch spectrum above Nyquist or highest impedance frequency
+_MAX_TRUNCATED_CHARGE = 1e-4 # bunch charge outside of time window
+# internally generated time windows are cheap to extend, so they truncate much less
+_MAX_TRUNCATED_CHARGE_INTERNAL = 1e-9
+
+
+def _get_binomial_full_bunch_length(
+    sigma: float, # s
+    exponent: float
+) -> float:
+
+    return 2 * sigma * sqrt(3 + 2 * exponent) # s
 
 
 def _get_binomial_bunch_profile(
-    time_array: RealArray, # s
+    time_array: Real1dArray, # s
     sigma: float, # s
     exponent: float,
-) -> tuple[RealArray, RealArray]:
+) -> Real1dArray:
 
-    full_bunch_length = 4 * sigma * sqrt(3 + 2 * exponent) / 2
+    full_bunch_length = _get_binomial_full_bunch_length(sigma, exponent)
     amplitude = (
         2 * gamma(1.5 + exponent)
         / (full_bunch_length * sqrt(pi) * gamma(1 + exponent))
     )
-    profile = (1 - 4 * (time_array / full_bunch_length) ** 2) ** exponent
+    profile = np.clip(1 - 4 * (time_array / full_bunch_length) ** 2, min=0, max=None) ** exponent
     profile[np.abs(time_array) > full_bunch_length / 2] = 0
     
-    return time_array, amplitude * profile # 1/s
+    return amplitude * profile # 1/s
 
 
 def _get_gaussian_bunch_profile(
-    time_array: RealArray, # s
+    time_array: Real1dArray, # s
     sigma: float # s
-) -> tuple[RealArray, RealArray]:
+) -> Real1dArray:
 
     amplitude = 1 / (sigma * sqrt(2 * pi))
     profile = np.exp(-0.5 * (time_array / sigma) ** 2)
     
-    return time_array, amplitude * profile # 1/s
+    return amplitude * profile # 1/s
 
 
 class Bunch:
@@ -60,68 +73,164 @@ class Bunch:
         distribution: Literal['gaussian', 'binomial'],
         binomial_exponent: float | None = None,
     ) -> None:
+
+        if distribution == 'binomial':
+            if binomial_exponent is None:
+                raise ValueError('Must specify binomial exponent (mu) for binomial bunch distribution')
+        elif distribution == 'gaussian':
+            if binomial_exponent is not None:
+                raise ValueError('Binomial exponent (mu) should not be specified for gaussian bunch distribution')
+        else:
+            raise ValueError(f'Unknown bunch distribution `{distribution}`')
+        if not sigma > 0:
+            raise ValueError(f'Bunch length sigma must be positive, got {sigma}')
         
         self.distribution = distribution
         self.sigma = sigma
         self.charge = charge
         self.binomial_exponent = binomial_exponent
+
+    @property
+    def _binomial_parameters(self) -> tuple[float, float]:
+        assert self.binomial_exponent is not None
+        return (
+            _get_binomial_full_bunch_length(self.sigma, self.binomial_exponent), # s
+            self.binomial_exponent
+        )
     
     def get_profile(
         self,
-        time_array: RealArray # s
-    ) -> tuple[RealArray, RealArray]:
+        time_array: Real1dArray # s
+    ) -> Real1dArray:
 
         # get normalized bunch profile according to distribution, unit is 1/s
         if self.distribution == 'binomial':
-            if not self.binomial_exponent:
-                raise ValueError('Must specify binomial exponent (mu) for binomial bunch distribution')
-            _, profile = _get_binomial_bunch_profile(
+            assert self.binomial_exponent is not None
+            profile = _get_binomial_bunch_profile(
                 time_array=time_array,
                 sigma=self.sigma,
                 exponent=self.binomial_exponent
             )
-        elif self.distribution == 'gaussian':
-            if self.binomial_exponent is not None:
-                raise ValueError('Binomial exponent (mu) should not be specified for gaussian bunch distribution')
-            _, profile = _get_gaussian_bunch_profile(
+        else:
+            profile = _get_gaussian_bunch_profile(
                 time_array=time_array,
                 sigma=self.sigma
             )
-        else:
-            raise ValueError(f'Unknown bunch distribution `{self.distribution}`')
         
-        # Sanity checks
-        if settings.sanity_check:
-            integral = np.trapezoid(profile, time_array)
-            if not np.isclose(integral, 1, rtol=settings.sanity_check_tolerance):
-                raise SanityCheckError(f'Integral over `{self.distribution}` normalized profile not equal to unity, got {integral} instead')
-        
-        return (
-            time_array, # s
-            self.charge * profile # A
-        )
+        return self.charge * profile # A
+
+    def get_form_factor(
+        self,
+        frequency_array: Real1dArray # Hz
+    ) -> Real1dArray:
+
+        # analytic bunch spectrum, normalized to unity at DC, for a bunch centred at t = 0
+        if self.distribution == 'gaussian':
+            return np.exp(-0.5 * (2 * pi * frequency_array * self.sigma)**2)
+
+        full_bunch_length, exponent = self._binomial_parameters
+        order = exponent + 0.5
+        x = np.abs(pi * frequency_array * full_bunch_length) # omega * full_bunch_length / 2
+        form_factor = np.ones_like(x)
+        nonzero = x > 0
+        form_factor[nonzero] = gamma(order + 1) * (x[nonzero] / 2)**(-order) * jv(order, x[nonzero])
+
+        return form_factor
+
+    def get_truncated_charge_fraction(
+        self,
+        half_window: float # s
+    ) -> float:
+
+        # fraction of bunch charge outside of +/- half_window
+        if self.distribution == 'gaussian':
+            return float(erfc(half_window / (sqrt(2) * self.sigma)))
+
+        full_bunch_length, exponent = self._binomial_parameters
+        u = min(1, 2 * half_window / full_bunch_length)
+        return float(1 - betainc(0.5, exponent + 1, u**2))
+
+    def get_half_width(
+        self,
+        max_truncated_charge_fraction: float
+    ) -> float:
+
+        # half width of the time window outside of which the given fraction of charge is located
+        if self.distribution == 'gaussian':
+            return sqrt(2) * self.sigma * float(erfcinv(max_truncated_charge_fraction)) # s
+
+        full_bunch_length, exponent = self._binomial_parameters
+        return full_bunch_length / 2 * sqrt(float(
+            betaincinv(0.5, exponent + 1, 1 - max_truncated_charge_fraction)
+        )) # s
+
+    def _get_form_factor_envelope(
+        self,
+        frequency: float # Hz
+    ) -> float:
+
+        # maximum over one oscillation period above `frequency`, as the binomial form factor has zeros
+        oscillation_period = 1 / self.get_half_width(_MAX_TRUNCATED_CHARGE_INTERNAL) # Hz
+        frequency_array = frequency + np.linspace(0, oscillation_period, 65)
+        return float(np.max(np.abs(self.get_form_factor(frequency_array))))
+
+    def _get_internal_time_array(
+        self,
+        time_step: float # s
+    ) -> Real1dArray:
+
+        # symmetric time axis that contains t = 0 and covers the entire bunch
+        num_half = ceil(self.get_half_width(_MAX_TRUNCATED_CHARGE_INTERNAL) / time_step)
+        return time_step * np.arange(-num_half, num_half + 1) # s
+
+    def _check_sampling(
+        self,
+        time_step: float, # s
+        half_window: float | None = None, # s
+        stacklevel: int = 3
+    ) -> None:
+
+        # bunch spectrum above the Nyquist frequency is aliased
+        nyquist_frequency = 1 / (2 * time_step)
+        form_factor = self._get_form_factor_envelope(nyquist_frequency)
+        if form_factor > _MAX_FORM_FACTOR:
+            warnings.warn(
+                f'Time step {format_quantity(time_step, "s")} is too coarse for {self.distribution} bunch with sigma {format_quantity(self.sigma, "s")} ({self.sigma / time_step:.2f} samples per sigma): '
+                f'bunch spectrum at Nyquist frequency {format_quantity(nyquist_frequency, "Hz")} is {form_factor:.1e} of DC and will be aliased. Reduce the time step (increase the maximum frequency)',
+                AccuracyWarning, stacklevel=stacklevel
+            )
+
+        # charge outside of the time window is missing
+        if half_window is not None:
+            truncated_fraction = self.get_truncated_charge_fraction(half_window)
+            if truncated_fraction > _MAX_TRUNCATED_CHARGE:
+                warnings.warn(
+                    f'Time window +/- {format_quantity(half_window, "s")} ({half_window / self.sigma:.2f} sigma) truncates {truncated_fraction:.1e} of the charge of {self.distribution} bunch with sigma {format_quantity(self.sigma, "s")}',
+                    AccuracyWarning, stacklevel=stacklevel
+                )
 
     def get_spectrum(
         self,
         max_frequency: float, # Hz
         frequency_step: float # Hz
-    ) -> tuple[RealArray, ComplexArray]:
+    ) -> tuple[Real1dArray, Complex1dArray]:
         
         time_period = 1 / frequency_step
         time_step = 1 / (2 * max_frequency)
-        num_samples = ceil(time_period / time_step)
+        self._check_sampling(time_step=time_step, half_window=time_period/2)
+
+        num_samples = round(time_period / time_step)
         time_array = np.linspace(
             start=-time_period/2, stop=time_period/2, num=num_samples, endpoint=False
         )
 
-        _, profile = self.get_profile(time_array)
+        profile = self.get_profile(time_array)
         spectrum_array = np.fft.rfft(profile) * time_step
         frequency_array = np.fft.rfftfreq(len(profile), time_step)
 
-        if settings.sanity_check:
-            if not np.isclose(spectrum_array[0], self.charge, rtol=settings.sanity_check_tolerance):
-                raise SanityCheckError(f'DC component of spectrum {format_quantity(spectrum_array[0], 'C')}) not equal to bunch charge {format_quantity(self.charge, 'C')}')
-        
+        # correct for non-zero start time, so that t = 0 is at the bunch centre
+        spectrum_array *= np.exp(-2j * pi * frequency_array * time_array[0])
+
         return (
             frequency_array, # Hz
             spectrum_array # C
@@ -129,16 +238,15 @@ class Bunch:
 
     def get_loss_factor(
         self,
-        time_array: RealArray, # s
-        wake_array: RealArray, # V/C/m^p
+        time_array: Real1dArray, # s
+        wake_array: Real1dArray, # V/C/m^p
     ) -> float:
 
-        dt = time_array[1] - time_array[0]
-        if not np.allclose(np.diff(time_array), dt):
-            raise ValueError('Time axis must be equidistant')
+        dt = _get_uniform_step(time_array)
+        self._check_sampling(time_step=dt)
 
-        # extend wake time axis with zeros to cover at least +/- 5 sigma
-        extent = 5 * self.sigma # s
+        # extend wake time axis with zeros to cover the entire bunch
+        extent = self.get_half_width(_MAX_TRUNCATED_CHARGE_INTERNAL) # s
         num_before = max(0, ceil((time_array[0] + extent) / dt))
         num_after = max(0, ceil((extent - time_array[-1]) / dt))
         time_array = time_array[0] + dt * np.arange(
@@ -146,7 +254,7 @@ class Bunch:
         ) # s
         wake_potential = np.pad(wake_array, (num_before, num_after)) # V/C
 
-        _, profile = self.get_profile(time_array) # A
+        profile = self.get_profile(time_array) # A
         profile /= self.charge # 1/s
 
         # convention: positive wake is decelerating <-> positive loss factor
@@ -189,8 +297,20 @@ class Beam:
         if beta != 1.0:
             raise NotImplementedError('Only relativistic beams with `beta` = 1 are currently supported')
 
-        self._cached_profile: tuple[RealArray, RealArray] | None = None
-        self._cached_spectrum: tuple[RealArray, ComplexArray] | None = None
+        # validates distribution parameters and sampling before any expensive calculation
+        self._unit_charge_bunch = Bunch(
+            charge=1,
+            sigma=bunch_sigma,
+            distribution=bunch_distribution,
+            binomial_exponent=bunch_binomial_exponent
+        )
+        self._unit_charge_bunch._check_sampling(
+            time_step=1 / (2 * max_frequency),
+            half_window=self.bucket_length / 2
+        )
+
+        self._cached_profile: tuple[Real1dArray, Real1dArray] | None = None
+        self._cached_spectrum: tuple[Real1dArray, Complex1dArray] | None = None
 
     @property
     def circumference(self) -> float:
@@ -213,7 +333,7 @@ class Beam:
         return self._bunch_sigma # s
     
     @property
-    def bunch_distribution(self) -> str:
+    def bunch_distribution(self) -> Literal['gaussian', 'binomial']:
         return self._bunch_distribution
     
     @property
@@ -248,7 +368,7 @@ class Beam:
     def average_current(self) -> float:
         return self.charge * self.revolution_frequency # A
 
-    def get_profile(self) -> tuple[RealArray, RealArray]:
+    def get_profile(self) -> tuple[Real1dArray, Real1dArray]:
         
         # if cached profile exists, return it instead of calculating again
         if self._cached_profile is not None:
@@ -267,12 +387,7 @@ class Beam:
         )
 
         # get profile of a bunch with unit charge
-        _, unit_charge_bunch_profile = Bunch(
-            charge=1,
-            sigma=self.bunch_sigma,
-            distribution=self.bunch_distribution,
-            binomial_exponent=self.bunch_binomial_exponent
-        ).get_profile(bunch_time_array) # A
+        unit_charge_bunch_profile = self._unit_charge_bunch.get_profile(bunch_time_array) # A
 
         empty_profile = np.zeros_like(bunch_time_array)
 
@@ -292,21 +407,6 @@ class Beam:
         beam_profile = np.concatenate(bunch_profiles) # A
         beam_time_array = np.concatenate(bunch_time_arrays)
 
-        if settings.sanity_check:
-            # time array of the entire beam 
-            beam_time_array_check = np.linspace(
-                start=-self.bucket_length/2,
-                stop=self.revolution_period - self.bucket_length/2,
-                num=self.harmonic_number * num_samples_per_bucket, endpoint=False
-            )
-            if not len(beam_time_array) == len(beam_time_array_check):
-                raise SanityCheckError(f'Number of samples in time array ({len(beam_time_array)}) and beam profile ({len(beam_profile)}) do not match')
-            if not np.allclose(beam_time_array, beam_time_array_check, rtol=settings.sanity_check_tolerance):
-                raise SanityCheckError(f'Samples in time array do not match expected values')
-            integrated_beam_current = float(np.trapezoid(beam_profile, beam_time_array))
-            if not np.isclose(integrated_beam_current, self.charge, rtol=settings.sanity_check_tolerance):
-                raise SanityCheckError(f'Integral over beam profile {format_quantity(integrated_beam_current, 'C')}) not equal to total beam charge {format_quantity(self.charge, 'C')}')
-
         # store profile in cache
         self._cached_profile = (beam_time_array, beam_profile)
 
@@ -315,7 +415,7 @@ class Beam:
             beam_profile # A
         )
 
-    def get_spectrum(self) -> tuple[RealArray, ComplexArray]:
+    def get_spectrum(self) -> tuple[Real1dArray, Complex1dArray]:
         
         # if cached spectrum exists, return it instead of calculating again
         if self._cached_spectrum is not None:
@@ -332,12 +432,8 @@ class Beam:
         spectrum_array = time_step * np.fft.rfft(beam_profile) # C
         frequency_array = np.fft.rfftfreq(len(beam_profile), time_step) # Hz
 
-        # Sanity checks
-        if settings.sanity_check:
-            if not np.isclose(spectrum_array[0], self.charge, rtol=settings.sanity_check_tolerance):
-                raise SanityCheckError(f'DC component of spectrum {format_quantity(spectrum_array[0], "C")}) not equal average beam charge {format_quantity(self.charge, "C")}')
-            if not np.isclose(frequency_array[1]-frequency_array[0], self.revolution_frequency, rtol=settings.sanity_check_tolerance):
-                raise SanityCheckError(f'Frequency resolution of spectrum {format_quantity(frequency_array[1]-frequency_array[0], "Hz")}) does not match revolution frequency {format_quantity(self.revolution_frequency, "Hz")}')
+        # correct for non-zero start time, so that t = 0 is at the centre of the first bucket
+        spectrum_array *= np.exp(-2j * pi * frequency_array * beam_time_array[0])
 
         # write generated spectrum to cache
         self._cached_spectrum = (frequency_array, spectrum_array)
@@ -347,51 +443,71 @@ class Beam:
             spectrum_array # C
         )
     
-    def get_power_loss_spectrum(
+    def _get_real_impedance_at_beam_frequencies(
         self,
-        frequency_array: RealArray, # Hz
-        impedance_array: ComplexArray, # Ohm
-        negative_real_impedance_handling: Literal['clip', 'abs', 'raise'] = 'clip'
-    ) -> tuple[RealArray, RealArray]:
+        frequency_array: Real1dArray, # Hz
+        impedance_array: Complex1dArray, # Ohm
+        negative_real_impedance_handling: NegativeImpedanceHandling
+    ) -> Real1dArray:
 
-        max_impedance_delta_f = max(np.diff(frequency_array))
+        max_impedance_delta_f = float(max(np.diff(frequency_array)))
         if (max_impedance_delta_f > self.revolution_frequency):
-            logger.warning(f'Impedance frequency resolution {format_quantity(max_impedance_delta_f, "Hz")} is coarser than revolution frequency {format_quantity(self.revolution_frequency, "Hz")}. This may lead to inaccurate results')
-        
-        beam_freq, beam_spectrum = self.get_spectrum() # Hz, C
+            warnings.warn(
+                f'Impedance frequency resolution {format_quantity(max_impedance_delta_f, "Hz")} is coarser than revolution frequency {format_quantity(self.revolution_frequency, "Hz")}, narrow-band features may be missed',
+                AccuracyWarning, stacklevel=3
+            )
 
-        if (
-            (beam_freq[0] > frequency_array[0])
-            or (beam_freq[-1] < frequency_array[-1])
-        ):
-            logger.warning(f'Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(frequency_array[0], "Hz")} - {format_quantity(frequency_array[-1], "Hz")}. This may lead to inaccurate results')
+        # impedance is assumed zero above its highest frequency
+        max_impedance_frequency = float(frequency_array[-1])
+        form_factor = self._unit_charge_bunch._get_form_factor_envelope(max_impedance_frequency)
+        if form_factor > _MAX_FORM_FACTOR:
+            warnings.warn(
+                f'Impedance only given up to {format_quantity(max_impedance_frequency, "Hz")}, where the bunch spectrum is still {form_factor:.1e} of DC. Power loss at higher frequencies is neglected',
+                AccuracyWarning, stacklevel=3
+            )
+
+        beam_freq, _ = self.get_spectrum() # Hz
 
         real_impedance_at_beam_freq = np.interp(
-                x=beam_freq,
-                xp=frequency_array,
-                fp=np.real(impedance_array),
-                left=0.0, right=0.0
-        )
-        
+            x=beam_freq,
+            xp=frequency_array,
+            fp=np.real(impedance_array),
+            left=0.0, right=0.0
+        ) # Ohm
+
         if negative_real_impedance_handling == 'clip':
             real_impedance_at_beam_freq = np.clip(real_impedance_at_beam_freq, min=0, max=None)
         elif negative_real_impedance_handling == 'abs':
             real_impedance_at_beam_freq = np.abs(real_impedance_at_beam_freq)
+        elif negative_real_impedance_handling == 'raise':
+            num_negative = int(np.sum(real_impedance_at_beam_freq < 0))
+            if num_negative > 0:
+                raise ValueError(f'Real part of impedance is negative at {num_negative} ({100*num_negative/len(real_impedance_at_beam_freq):.1f} %) of the beam spectral lines')
         elif negative_real_impedance_handling == 'ignore':
             pass
         else:
             raise ValueError(f'Unknown handling of negative impedance real part: `{negative_real_impedance_handling}`')
 
+        return real_impedance_at_beam_freq # Ohm
+
+    def get_power_loss_spectrum(
+        self,
+        frequency_array: Real1dArray, # Hz
+        impedance_array: Complex1dArray, # Ohm
+        negative_real_impedance_handling: NegativeImpedanceHandling = 'raise'
+    ) -> tuple[Real1dArray, Real1dArray]:
+
+        beam_freq, beam_spectrum = self.get_spectrum() # Hz, C
+        real_impedance_at_beam_freq = self._get_real_impedance_at_beam_frequencies(
+            frequency_array=frequency_array,
+            impedance_array=impedance_array,
+            negative_real_impedance_handling=negative_real_impedance_handling
+        ) # Ohm
+
         power_loss_spectrum = (
             self.revolution_frequency**2
             * np.abs(beam_spectrum)**2 * real_impedance_at_beam_freq
         ) # Hz^2 * C^2 * Ohm = W
-    
-        # Sanity checks
-        if settings.sanity_check and (negative_real_impedance_handling == 'raise'):
-            num_negative = sum(power_loss_spectrum < 0)
-            if (num_negative > 0):
-                raise SanityCheckError(f'Power loss spectrum contains {num_negative} ({100*num_negative/len(power_loss_spectrum):.1f} % of samples) negative values, likely because of negative real part of the impedance')
 
         return (
             beam_freq, # Hz
@@ -400,9 +516,9 @@ class Beam:
 
     def get_power_loss(
         self,
-        frequency_array: RealArray, # Hz
-        impedance_array: ComplexArray, # Ohm
-        negative_real_impedance_handling: Literal['clip', 'abs', 'raise'] = 'clip',
+        frequency_array: Real1dArray, # Hz
+        impedance_array: Complex1dArray, # Ohm
+        negative_real_impedance_handling: NegativeImpedanceHandling = 'raise',
     ) -> float:
 
         _, power_loss_spectrum = self.get_power_loss_spectrum(
@@ -410,46 +526,25 @@ class Beam:
             impedance_array=impedance_array,
             negative_real_impedance_handling=negative_real_impedance_handling
         ) # W
-        power_loss = 2 * float(np.sum(power_loss_spectrum)) # W
-
-        # Sanity checks
-        if settings.sanity_check:
-            if power_loss < 0:
-                raise SanityCheckError(f'Power loss should be non-negative, got {power_loss} W')
+        # positive and negative frequencies contribute equally, except for DC
+        power_loss = 2 * float(np.sum(power_loss_spectrum)) - float(power_loss_spectrum[0]) # W
 
         return power_loss # W
-    
+
     def get_shifted_power_loss(
         self,
-        frequency_array: RealArray, # Hz
-        value_array: ComplexArray, # Ohm
+        frequency_array: Real1dArray, # Hz
+        value_array: Complex1dArray, # Ohm
         max_frequency_shift: float, # Hz
-        negative_real_impedance_handling: Literal['clip', 'abs', 'raise'] = 'clip'
-    ) -> tuple[RealArray, RealArray]:
+        negative_real_impedance_handling: NegativeImpedanceHandling = 'raise'
+    ) -> tuple[Real1dArray, Real1dArray]:
 
         beam_freq, beam_spectrum = self.get_spectrum() # Hz, C
-
-        if (
-            (beam_freq[0] > frequency_array[0])
-            or (beam_freq[-1] < frequency_array[-1])
-        ):
-            logger.warning(f'Beam spectrum frequency range {format_quantity(beam_freq[0], "Hz")} - {format_quantity(beam_freq[-1], "Hz")} does not cover impedance frequency range {format_quantity(frequency_array[0], "Hz")} - {format_quantity(frequency_array[-1], "Hz")}. This may lead to inaccurate results')
-
-        real_impedance_at_beam_freq = np.interp(
-            x=beam_freq,
-            xp=frequency_array,
-            fp=np.real(value_array),
-            left=0.0, right=0.0
-        )
-        
-        if negative_real_impedance_handling == 'clip':
-            real_impedance_at_beam_freq = np.clip(real_impedance_at_beam_freq, min=0, max=None)
-        elif negative_real_impedance_handling == 'abs':
-            real_impedance_at_beam_freq = np.abs(real_impedance_at_beam_freq)
-        elif negative_real_impedance_handling == 'ignore':
-            pass
-        else:
-            raise ValueError(f'Unknown handling of negative impedance real part: `{negative_real_impedance_handling}`')
+        real_impedance_at_beam_freq = self._get_real_impedance_at_beam_frequencies(
+            frequency_array=frequency_array,
+            impedance_array=value_array,
+            negative_real_impedance_handling=negative_real_impedance_handling
+        ) # Ohm
 
         frequency_step = beam_freq[1] - beam_freq[0]
         max_step = ceil(max_frequency_shift / frequency_step)
@@ -470,9 +565,11 @@ class Beam:
             elif shift_step > 0:
                 shifted_impedance[:shift_step] = 0
             
-            power_losses[index] = 2 * float(
-                np.sum(squared_current * shifted_impedance) # A^2 * Ohm = W
-            )
+            # positive and negative frequencies contribute equally, except for DC
+            power_losses[index] = (
+                2 * float(np.sum(squared_current * shifted_impedance))
+                - float(squared_current[0] * shifted_impedance[0])
+            ) # A^2 * Ohm = W
 
         logger.info(f'Power loss calculation results:')
         logger.info(f'  max:    {format_quantity(max(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmax(power_losses)] * frequency_step, "Hz"):>12}')

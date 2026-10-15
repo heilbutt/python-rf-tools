@@ -10,7 +10,7 @@ import logging
 logger = logging.getLogger(__name__) # rf_tools.cst
 
 from typing import Literal, Iterable, overload
-from .quantities import RealArray, ComplexArray
+from .utils import Real1dArray, Complex1dArray
 
 __all__ = [
     'get_quantity_from_cst_ascii',
@@ -72,30 +72,31 @@ def _get_block_metadata_from_cst_ascii(
     current_block_start: int | None = None
     have_seen_data_in_current_block: bool = False
 
-    for line_number, line in enumerate(open(filename, 'r')):
-        if not line.startswith('#'):
-            # data line
-            have_seen_data_in_current_block = True
-            continue # not a comment line
+    with open(filename, 'r') as fp:
+        for line_number, line in enumerate(fp):
+            if not line.startswith('#'):
+                # data line
+                have_seen_data_in_current_block = True
+                continue # not a comment line
 
-        # header line
-        if not have_seen_data_in_current_block:
-            current_header_lines.append(line)
+            # header line
+            if not have_seen_data_in_current_block:
+                current_header_lines.append(line)
+                if current_block_start is None:
+                    current_block_start = line_number
+                continue
+
+            # start of a new block, close the current block
             if current_block_start is None:
-                current_block_start = line_number
-            continue
-
-        # start of a new block, close the current block
-        if current_block_start is None:
-            raise CstAsciiParseError(f'Could not parse blocks in `{filename}`')
-        blocks.append(_BlockMetadata(
-            start_index=current_block_start,
-            stop_index=line_number,
-            header_lines=current_header_lines.copy()
-        ))
-        current_block_start = line_number
-        current_header_lines = [line]
-        have_seen_data_in_current_block = False
+                raise CstAsciiParseError(f'Could not parse blocks in `{filename}`')
+            blocks.append(_BlockMetadata(
+                start_index=current_block_start,
+                stop_index=line_number,
+                header_lines=current_header_lines.copy()
+            ))
+            current_block_start = line_number
+            current_header_lines = [line]
+            have_seen_data_in_current_block = False
 
     # close last block if file ended without a new header
     if current_block_start is None:
@@ -111,7 +112,7 @@ def _get_block_metadata_from_cst_ascii(
 
 def _get_complex_quantity_from_cst_ascii_lines(
     lines: Iterable[str],
-) -> tuple[RealArray, ComplexArray]:
+) -> tuple[Real1dArray, Complex1dArray]:
     
     raw = np.loadtxt(lines, comments='#')
 
@@ -138,7 +139,7 @@ def _get_complex_quantity_from_cst_ascii_lines(
 
 def _get_real_quantity_from_cst_ascii_lines(
     lines: Iterable[str],
-) -> tuple[RealArray, RealArray]:
+) -> tuple[Real1dArray, Real1dArray]:
 
     raw = np.loadtxt(lines, comments='#')
     return (
@@ -154,7 +155,7 @@ def get_quantity_from_cst_ascii(
     parameter_filter: dict[str, float] = ...,
     x_multiplier: float | str = ...,
     y_multiplier: float | str = ...,
-) -> tuple[RealArray, ComplexArray]:
+) -> tuple[Real1dArray, Complex1dArray]:
     ...
     
 @overload
@@ -164,7 +165,7 @@ def get_quantity_from_cst_ascii(
     parameter_filter: dict[str, float] = ...,
     x_multiplier: float | str = ...,
     y_multiplier: float | str = ...,
-) -> tuple[RealArray, RealArray]:
+) -> tuple[Real1dArray, Real1dArray]:
     ...
 
 def get_quantity_from_cst_ascii(
@@ -173,7 +174,7 @@ def get_quantity_from_cst_ascii(
     parameter_filter: dict[str, float] = {},
     x_multiplier: float | str = 1,
     y_multiplier: float | str = 1,
-) -> tuple[RealArray, RealArray | ComplexArray]:
+) -> tuple[Real1dArray, Real1dArray | Complex1dArray]:
 
     # first, iterate over entire file without actually parsing,
     # this will also ensure that parameter filter is unambiguous
