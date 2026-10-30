@@ -29,7 +29,9 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "pyrefly>=1.4.0",
     "pytest>=9.1.1",
+    "ruff>=0.17.3",
     "scipy-stubs>=1.18.1.1",
     "types-tqdm>=4.70.0.20260906",
 ]
