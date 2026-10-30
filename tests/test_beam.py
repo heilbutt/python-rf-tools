@@ -439,6 +439,28 @@ def test_power_loss_warns_on_beam_not_covering_bunch_spectrum():
         beam.get_power_loss(*broadband_impedance(beam, 100.0))
 
 
+def test_shifted_power_loss_matches_brute_force():
+    beam = make_beam()
+    f, beam_spectrum = beam.get_spectrum()
+    rng = np.random.default_rng(42)
+    # impedance on the harmonics, non-zero at DC, shifts beyond the spectrum length
+    impedance = rng.uniform(1, 100, size=len(f)).astype(complex)
+    num_harmonics = len(f)
+    shifts, powers = beam.get_shifted_power_loss(
+        f, impedance, max_frequency_shift=(num_harmonics + 2) * F_REV
+    )
+
+    squared_current = F_REV**2 * np.abs(beam_spectrum)**2
+    for shift, power in zip(np.round(shifts / F_REV).astype(int), powers):
+        shifted = np.zeros(num_harmonics)
+        for n in range(num_harmonics):
+            if 0 <= n - shift < num_harmonics:
+                shifted[n] = impedance[n - shift].real
+        expected = 2 * np.sum(squared_current * shifted) - squared_current[0] * shifted[0]
+        # FFT correlation has round-off errors relative to the largest power
+        assert power == pytest.approx(expected, rel=1e-9, abs=1e-12 * float(np.max(powers)))
+
+
 def test_shifted_power_loss():
     beam = make_beam()
     f, beam_spectrum = beam.get_spectrum()

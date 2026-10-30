@@ -132,18 +132,31 @@ def test_parameter_filter_negative_values(tmp_path):
     np.testing.assert_array_equal(y, [1, 1])
 
 
-@pytest.mark.xfail(strict=True, reason='parameter regex does not parse scientific notation, pending real CST data')
-def test_parameter_filter_scientific_notation(tmp_path):
+@pytest.mark.parametrize('written, value', [
+    ('2', 2.0),
+    ('+2', 2.0),
+    ('-2', -2.0),
+    ('2.5', 2.5),
+    ('2.', 2.0),
+    ('.5', 0.5),
+    ('-.5', -0.5),
+    ('2e-3', 2e-3),
+    ('2E-3', 2e-3),
+    ('2.5e+3', 2.5e3),
+    ('-2.5e3', -2.5e3),
+    ('.5e-3', 0.5e-3),
+    ('2.e3', 2e3),
+])
+def test_parameter_filter_number_formats(tmp_path, written, value):
     path = write(
         tmp_path,
-        block(REAL_HEADER, [[0, 1], [1, 1]], parameters='sigma=1e-3'),
-        block(REAL_HEADER, [[0, 2], [1, 2]], parameters='sigma=2e-3'),
+        block(REAL_HEADER, [[0, 1], [1, 1]], parameters='sigma=999'),
+        block(REAL_HEADER, [[0, 2], [1, 2]], parameters=f'sigma={written}'),
     )
-    _, y = get_quantity_from_cst_ascii(path, is_complex=False, parameter_filter=dict(sigma=2e-3))
+    _, y = get_quantity_from_cst_ascii(path, is_complex=False, parameter_filter=dict(sigma=value))
     np.testing.assert_array_equal(y, [2, 2])
 
 
-@pytest.mark.xfail(strict=True, reason='np.loadtxt returns 1D array for a single row, pending real CST data')
 @pytest.mark.parametrize('is_complex, header, row', [
     (False, REAL_HEADER, [1.0, 2.0]),
     (True, REAL_IMAG_HEADER, [1.0, 2.0, 3.0]),

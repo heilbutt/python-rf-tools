@@ -1,8 +1,8 @@
 __all__ = [
-    'PREFIXES',
-    'TIME_UNITS',
     'FREQUENCY_UNITS',
     'LENGTH_UNITS',
+    'PREFIXES',
+    'TIME_UNITS',
     'format_quantity'
 ]
 

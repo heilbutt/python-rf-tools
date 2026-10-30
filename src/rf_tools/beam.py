@@ -1,29 +1,32 @@
-import numpy as np
-from scipy.constants import c
-from scipy.special import betainc, betaincinv, erfc, erfcinv, jv
-from math import pi, gamma, sqrt, ceil, floor
-from tqdm import tqdm
+import logging
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import InitVar, dataclass, field
-import warnings
+from math import ceil, floor, gamma, pi, sqrt
+
+import numpy as np
+from scipy.constants import c
+from scipy.fft import irfft, next_fast_len, rfft
+from scipy.special import betainc, betaincinv, erfc, erfcinv, jv
 
 from .units import format_quantity
 
-import logging
 logger = logging.getLogger(__name__) # rf_tools.beams
 
-from typing import Literal, Sequence, TypeAlias
-from .utils import Real1dArray, Complex1dArray, AccuracyWarning, _get_uniform_step
+from collections.abc import Sequence
+from typing import Literal
+
+from .utils import AccuracyWarning, Complex1dArray, Real1dArray, _get_uniform_step
 
 __all__ = [
+    'Beam',
+    'BinomialBunch',
     'Bunch',
     'GaussianBunch',
-    'BinomialBunch',
-    'Beam',
     'NegativeImpedanceHandling'
 ]
 
-NegativeImpedanceHandling: TypeAlias = Literal['clip', 'abs', 'raise', 'ignore']
+NegativeImpedanceHandling: type = Literal['clip', 'abs', 'raise', 'ignore']
 
 # thresholds for `AccuracyWarning`, relative to the bunch spectrum at DC and the bunch charge
 _MAX_FORM_FACTOR = 1e-3 # neglected bunch spectrum above Nyquist or highest impedance frequency
@@ -378,7 +381,7 @@ class Beam:
 
         # bunch in bucket k is delayed by k bucket lengths, i.e. by a phase of -2 pi n k / h at harmonic n,
         # so the filling pattern contributes its discrete Fourier transform, periodic in n with period h
-        filling_pattern_spectrum = np.fft.fft(np.asarray(self.filling_scheme, dtype=float))
+        filling_pattern_spectrum: Complex1dArray = np.fft.fft(np.asarray(self.filling_scheme, dtype=float))
         spectrum_array = (
             self.bunch.charge
             * self.bunch.get_form_factor(frequency_array)
@@ -436,7 +439,7 @@ class Beam:
         negative_real_impedance_handling: NegativeImpedanceHandling
     ) -> Real1dArray:
 
-        max_impedance_delta_f = float(max(np.diff(frequency_array)))
+        max_impedance_delta_f = float(np.max(np.diff(frequency_array)))
         if (max_impedance_delta_f > self.revolution_frequency):
             warnings.warn(
                 f'Impedance frequency resolution {format_quantity(max_impedance_delta_f, "Hz")} is coarser than revolution frequency {format_quantity(self.revolution_frequency, "Hz")}, narrow-band features may be missed',
@@ -537,29 +540,31 @@ class Beam:
         frequency_step = beam_freq[1] - beam_freq[0]
         max_step = ceil(max_frequency_shift / frequency_step)
         shift_steps = np.arange(-max_step, max_step + 1)
-        power_losses = np.zeros_like(shift_steps, dtype=float) # W
+        num_harmonics = len(squared_beam_spectrum)
 
         logger.info(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_frequency_shift, "Hz")} in steps of {format_quantity(frequency_step, "Hz")} ({len(shift_steps)} steps)')
 
-        # precompute for speed
-        squared_current = self.revolution_frequency**2 * squared_beam_spectrum # A^2
+        # impedance shifted by s harmonics is Z[n - s] at harmonic n, zero outside of the array, so the
+        # power loss is a cross-correlation: sum_n S[n] Z[n - s], computed for all shifts at once via FFT.
+        # Circular correlation of length >= num_harmonics + max_step is exact for |s| <= max_step
+        fft_length = next_fast_len(num_harmonics + max_step, real=True)
+        correlation_spectrum = rfft(squared_beam_spectrum, n=fft_length)
+        correlation_spectrum *= np.conj(rfft(real_impedance_at_beam_freq, n=fft_length))
+        correlation = irfft(correlation_spectrum, n=fft_length) # C^2 * Ohm, shift s at index s mod fft_length
 
-        for index, shift_step in enumerate(
-            tqdm(shift_steps, disable=not logger.isEnabledFor(logging.INFO))
-        ):
-            shifted_impedance = np.roll(real_impedance_at_beam_freq, shift=shift_step)
-            if shift_step < 0:
-                shifted_impedance[shift_step:] = 0
-            elif shift_step > 0:
-                shifted_impedance[:shift_step] = 0
-            
-            # positive and negative frequencies contribute equally, except for DC
-            power_losses[index] = (
-                2 * float(np.sum(squared_current * shifted_impedance))
-                - float(squared_current[0] * shifted_impedance[0])
-            ) # A^2 * Ohm = W
+        # positive and negative frequencies contribute equally, except for DC,
+        # where the shifted impedance is Z[-s] for s <= 0 and zero otherwise
+        dc_impedance = np.where(
+            (shift_steps <= 0) & (-shift_steps < num_harmonics),
+            real_impedance_at_beam_freq[np.clip(-shift_steps, 0, num_harmonics - 1)],
+            0.0
+        ) # Ohm
+        power_losses = self.revolution_frequency**2 * (
+            2 * correlation[shift_steps % fft_length]
+            - squared_beam_spectrum[0] * dc_impedance
+        ) # Hz^2 * C^2 * Ohm = W
 
-        logger.info(f'Power loss calculation results:')
+        logger.info('Power loss calculation results:')
         logger.info(f'  max:    {format_quantity(max(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmax(power_losses)] * frequency_step, "Hz"):>12}')
         logger.info(f'  min:    {format_quantity(min(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmin(power_losses)] * frequency_step, "Hz"):>12}')
         logger.info(f'  mean:   {format_quantity(float(np.mean(power_losses)), "W"):>12}')

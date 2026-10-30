@@ -1,21 +1,22 @@
-from math import ceil, pi, sqrt
-import numpy as np
-from scipy.signal import fftconvolve
-from scipy.constants import c
-import warnings
-
-from .utils import Real1dArray, Complex1dArray, AccuracyWarning, _get_uniform_step
-from .beam import GaussianBunch
-
 import logging
+import warnings
+from math import ceil, pi, sqrt
+
+import numpy as np
+from scipy.constants import c
+from scipy.signal import fftconvolve
+
+from .beam import GaussianBunch
+from .utils import AccuracyWarning, Complex1dArray, Real1dArray, _get_uniform_step
+
 logger = logging.getLogger(__name__) # rf_tools.wake
 
 __all__ = [
-    'get_impedance_from_wake',
-    'get_wake_from_impedance',
-    'convolve_wake',
     'LongitudinalResonator',
-    'TransverseResonator'
+    'TransverseResonator',
+    'convolve_wake',
+    'get_impedance_from_wake',
+    'get_wake_from_impedance'
 ]
 
 # threshold for `AccuracyWarning`: validity of the short-bunch loss factor approximation

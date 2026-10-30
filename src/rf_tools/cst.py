@@ -1,21 +1,24 @@
-from dataclasses import dataclass
-from pathlib import Path
+import logging
 import re
-import numpy as np
+from dataclasses import dataclass
 from itertools import islice
+from pathlib import Path
+
+import numpy as np
 
 from .units import PREFIXES
 
-import logging
 logger = logging.getLogger(__name__) # rf_tools.cst
 
-from typing import Literal, Iterable, overload
-from .utils import Real1dArray, Complex1dArray
+from collections.abc import Iterable
+from typing import Literal, overload
+
+from .utils import Complex1dArray, Real1dArray
 
 __all__ = [
-    'get_quantity_from_cst_ascii',
     'CstAsciiParseError',
-    'CstAsciiUnitParseError'
+    'CstAsciiUnitParseError',
+    'get_quantity_from_cst_ascii'
 ]
 
 
@@ -46,12 +49,11 @@ def _parameters_are_close(
         True if all shared keys are close according to tolerance.
     """
 
-    if ensure_same_key_set:
-        if a.keys() != b.keys():
+    if ensure_same_key_set and a.keys() != b.keys():
             raise KeyError('`a` and `b` do not have identical sets of keys')
 
-    for k in a.keys():
-        if not np.isclose(a[k], b[k], rtol=rel_tol, atol=abs_tol):
+    for k, v in a.items():
+        if not np.isclose(v, b[k], rtol=rel_tol, atol=abs_tol):
             return False
     return True
 
@@ -114,7 +116,7 @@ def _get_complex_quantity_from_cst_ascii_lines(
     lines: Iterable[str],
 ) -> tuple[Real1dArray, Complex1dArray]:
     
-    raw = np.loadtxt(lines, comments='#')
+    raw = np.loadtxt(lines, comments='#', ndmin=2) # ndmin=2 keeps a single data row 2D
 
     for line in lines:
         if not line.startswith('#'):
@@ -134,14 +136,14 @@ def _get_complex_quantity_from_cst_ascii_lines(
                 np.asarray(raw[:,1], dtype=complex) * np.exp(1j * raw[:,2])
             )
 
-    raise CstAsciiParseError(f'Could not determine complex format. Is this a complex-valued export from CST?')
+    raise CstAsciiParseError('Could not determine complex format. Is this a complex-valued export from CST?')
     
 
 def _get_real_quantity_from_cst_ascii_lines(
     lines: Iterable[str],
 ) -> tuple[Real1dArray, Real1dArray]:
 
-    raw = np.loadtxt(lines, comments='#')
+    raw = np.loadtxt(lines, comments='#', ndmin=2) # ndmin=2 keeps a single data row 2D
     return (
         raw[:,0],
         raw[:,1]
@@ -152,7 +154,7 @@ def _get_real_quantity_from_cst_ascii_lines(
 def get_quantity_from_cst_ascii(
     filename: Path | str,
     is_complex: Literal[True],
-    parameter_filter: dict[str, float] = ...,
+    parameter_filter: dict[str, float] | None = ...,
     x_multiplier: float | str = ...,
     y_multiplier: float | str = ...,
 ) -> tuple[Real1dArray, Complex1dArray]:
@@ -162,7 +164,7 @@ def get_quantity_from_cst_ascii(
 def get_quantity_from_cst_ascii(
     filename: Path | str,
     is_complex: Literal[False],
-    parameter_filter: dict[str, float] = ...,
+    parameter_filter: dict[str, float] | None= ...,
     x_multiplier: float | str = ...,
     y_multiplier: float | str = ...,
 ) -> tuple[Real1dArray, Real1dArray]:
@@ -171,7 +173,7 @@ def get_quantity_from_cst_ascii(
 def get_quantity_from_cst_ascii(
     filename: Path | str,
     is_complex: bool,
-    parameter_filter: dict[str, float] = {},
+    parameter_filter: dict[str, float] | None = None,
     x_multiplier: float | str = 1,
     y_multiplier: float | str = 1,
 ) -> tuple[Real1dArray, Real1dArray | Complex1dArray]:
@@ -193,7 +195,7 @@ def get_quantity_from_cst_ascii(
     else:
         # if user specified parameter filter, there must be exactly one matching block
         # regular expression to find parameter-value pairs
-        pattern = re.compile(r'(\w+)\s*=\s*([-+]?\d+(?:\.\d+)?)')
+        pattern = re.compile(r'(\w+)\s*=\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)')
         
         matching_blocks: list[_BlockMetadata] = []
         for block in blocks:

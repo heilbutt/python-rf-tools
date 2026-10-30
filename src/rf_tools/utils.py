@@ -1,16 +1,14 @@
 import numpy as np
 
-from typing import TypeAlias
-
 __all__ = [
-    'Real1dArray',
-    'Complex1dArray',
-    'normalize_array',
     'AccuracyWarning',
+    'Complex1dArray',
+    'Real1dArray',
+    'normalize_array',
 ]
 
-Real1dArray: TypeAlias = np.ndarray[tuple[int], np.dtype[np.floating]]
-Complex1dArray: TypeAlias = np.ndarray[tuple[int], np.dtype[np.complexfloating]]
+Real1dArray: type = np.ndarray[tuple[int], np.dtype[np.floating]]
+Complex1dArray: type = np.ndarray[tuple[int], np.dtype[np.complexfloating]]
 
 
 class AccuracyWarning(UserWarning):
