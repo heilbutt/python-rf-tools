@@ -1,5 +1,5 @@
 __all__ = [
-    'FREQUENCY_UNITS',
+    'FREQ_UNITS',
     'LENGTH_UNITS',
     'PREFIXES',
     'TIME_UNITS',
@@ -22,7 +22,7 @@ PREFIXES: dict[str, float] = {
 
 
 TIME_UNITS = {key + 's': value for key, value in PREFIXES.items()}
-FREQUENCY_UNITS = {key + 'Hz': value for key, value in PREFIXES.items()}
+FREQ_UNITS = {key + 'Hz': value for key, value in PREFIXES.items()}
 LENGTH_UNITS = {key + 'm': value for key, value in PREFIXES.items()}
 
 

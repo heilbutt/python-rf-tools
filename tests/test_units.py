@@ -1,13 +1,13 @@
 import pytest
 
 from rf_tools.units import (
-    FREQUENCY_UNITS, LENGTH_UNITS, PREFIXES, TIME_UNITS, format_quantity
+    FREQ_UNITS, LENGTH_UNITS, PREFIXES, TIME_UNITS, format_quantity
 )
 
 
 @pytest.mark.parametrize('units, suffix', [
     (TIME_UNITS, 's'),
-    (FREQUENCY_UNITS, 'Hz'),
+    (FREQ_UNITS, 'Hz'),
     (LENGTH_UNITS, 'm'),
 ])
 def test_unit_tables_follow_prefixes(units, suffix):
@@ -16,7 +16,7 @@ def test_unit_tables_follow_prefixes(units, suffix):
 
 def test_unit_table_spot_values():
     assert TIME_UNITS['ns'] == 1e-9
-    assert FREQUENCY_UNITS['GHz'] == 1e9
+    assert FREQ_UNITS['GHz'] == 1e9
     assert LENGTH_UNITS['mm'] == 1e-3
 
 

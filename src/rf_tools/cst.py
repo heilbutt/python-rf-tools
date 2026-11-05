@@ -18,7 +18,7 @@ from .utils import Complex1dArray, Real1dArray
 __all__ = [
     'CstAsciiParseError',
     'CstAsciiUnitParseError',
-    'get_quantity_from_cst_ascii'
+    'read_cst_ascii'
 ]
 
 
@@ -151,7 +151,7 @@ def _get_real_quantity_from_cst_ascii_lines(
     
 
 @overload
-def get_quantity_from_cst_ascii(
+def read_cst_ascii(
     filename: Path | str,
     is_complex: Literal[True],
     parameter_filter: dict[str, float] | None = ...,
@@ -161,7 +161,7 @@ def get_quantity_from_cst_ascii(
     ...
     
 @overload
-def get_quantity_from_cst_ascii(
+def read_cst_ascii(
     filename: Path | str,
     is_complex: Literal[False],
     parameter_filter: dict[str, float] | None= ...,
@@ -170,7 +170,7 @@ def get_quantity_from_cst_ascii(
 ) -> tuple[Real1dArray, Real1dArray]:
     ...
 
-def get_quantity_from_cst_ascii(
+def read_cst_ascii(
     filename: Path | str,
     is_complex: bool,
     parameter_filter: dict[str, float] | None = None,

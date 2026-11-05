@@ -13,7 +13,7 @@ from rf_tools.utils import AccuracyWarning
 # 1 us revolution period, 10 buckets of 100 ns, 1 ns sampling (1000 samples per turn)
 CIRCUMFERENCE = c * 1e-6 # m
 F_REV = 1e6 # Hz
-MAX_FREQUENCY = 500e6 # Hz
+MAX_FREQ = 500e6 # Hz
 SIGMA = 5e-9 # s
 BUNCH_CHARGE = 1e-9 # C
 FILLING_SCHEME = [True, True, False, True, False, False, False, False, False, False]
@@ -30,7 +30,7 @@ BUNCHES = [
 def make_beam(**kwargs: Any) -> Beam:
     parameters: dict[str, Any] = dict(
         circumference=CIRCUMFERENCE,
-        max_frequency=MAX_FREQUENCY,
+        max_freq=MAX_FREQ,
         filling_scheme=FILLING_SCHEME,
         bunch=GAUSSIAN_BUNCH,
     )
@@ -88,7 +88,7 @@ def test_binomial_profile_has_finite_support(exponent):
 
 @pytest.mark.parametrize('bunch', BUNCHES)
 def test_bunch_form_factor_matches_numerical_spectrum(bunch):
-    f, spectrum = bunch.get_numeric_spectrum(max_frequency=2e9, frequency_step=1e6)
+    f, spectrum = bunch.get_numeric_spectrum(max_freq=2e9, freq_step=1e6)
     # numerical spectrum of the binomial bunch converges slowly, due to its sharp edges
     np.testing.assert_allclose(
         BUNCH_CHARGE * bunch.get_form_factor(f), spectrum, atol=1e-4 * BUNCH_CHARGE
@@ -128,16 +128,16 @@ def test_binomial_truncated_charge_is_zero_outside_support():
 @pytest.mark.parametrize('bunch', BUNCHES)
 def test_bunch_numeric_spectrum_warns_on_coarse_sampling(bunch):
     # 1 ns time step, i.e. 5 samples per sigma, is fine
-    bunch.get_numeric_spectrum(max_frequency=500e6, frequency_step=1e6)
+    bunch.get_numeric_spectrum(max_freq=500e6, freq_step=1e6)
     # 5 ns time step, i.e. 1 sample per sigma, makes the bunch look like a triangle
     with pytest.warns(AccuracyWarning, match='too coarse'):
-        bunch.get_numeric_spectrum(max_frequency=100e6, frequency_step=1e6)
+        bunch.get_numeric_spectrum(max_freq=100e6, freq_step=1e6)
 
 
 def test_bunch_numeric_spectrum_warns_on_truncated_window():
-    # 1 / frequency_step = 20 ns, i.e. +/- 2 sigma
+    # 1 / freq_step = 20 ns, i.e. +/- 2 sigma
     with pytest.warns(AccuracyWarning, match='truncates'):
-        GAUSSIAN_BUNCH.get_numeric_spectrum(max_frequency=1e9, frequency_step=50e6)
+        GAUSSIAN_BUNCH.get_numeric_spectrum(max_freq=1e9, freq_step=50e6)
 
 
 def test_bunch_loss_factor_warns_on_coarse_wake():
@@ -148,7 +148,7 @@ def test_bunch_loss_factor_warns_on_coarse_wake():
 
 @pytest.mark.parametrize('bunch', BUNCHES)
 def test_bunch_numeric_spectrum_dc_equals_charge(bunch):
-    f, spectrum = bunch.get_numeric_spectrum(max_frequency=1e9, frequency_step=1e6)
+    f, spectrum = bunch.get_numeric_spectrum(max_freq=1e9, freq_step=1e6)
     assert f[0] == 0
     assert f[1] - f[0] == pytest.approx(1e6)
     assert spectrum[0] == pytest.approx(BUNCH_CHARGE, rel=1e-9)
@@ -156,7 +156,7 @@ def test_bunch_numeric_spectrum_dc_equals_charge(bunch):
 
 def test_gaussian_bunch_numeric_spectrum():
     # bunch centred at t = 0, so the spectrum is real and positive
-    f, spectrum = GAUSSIAN_BUNCH.get_numeric_spectrum(max_frequency=1e9, frequency_step=1e6)
+    f, spectrum = GAUSSIAN_BUNCH.get_numeric_spectrum(max_freq=1e9, freq_step=1e6)
     expected = BUNCH_CHARGE * np.exp(-0.5 * (2 * pi * f * SIGMA)**2)
     np.testing.assert_allclose(spectrum, expected, atol=1e-9 * BUNCH_CHARGE)
 
@@ -187,7 +187,7 @@ def test_bunch_loss_factor_rejects_non_equidistant_time():
 def test_beam_derived_quantities():
     beam = make_beam()
     assert beam.bunch is GAUSSIAN_BUNCH
-    assert beam.revolution_frequency == pytest.approx(F_REV)
+    assert beam.revolution_freq == pytest.approx(F_REV)
     assert beam.revolution_period == pytest.approx(1 / F_REV)
     assert beam.harmonic_number == 10
     assert beam.bucket_length == pytest.approx(100e-9)
@@ -199,17 +199,17 @@ def test_beam_derived_quantities():
 def test_beam_is_immutable():
     beam = make_beam()
     with pytest.raises(FrozenInstanceError):
-        beam.max_frequency = 1e9 # type: ignore[misc]
+        beam.max_freq = 1e9 # type: ignore[misc]
     assert isinstance(beam.filling_scheme, tuple)
 
 
 def test_beam_equality_and_replace():
     beam = make_beam()
     assert make_beam(filling_scheme=list(FILLING_SCHEME)) == beam
-    modified = replace(beam, max_frequency=1e9)
-    assert modified.max_frequency == 1e9
+    modified = replace(beam, max_freq=1e9)
+    assert modified.max_freq == 1e9
     assert modified.filling_scheme == beam.filling_scheme
-    assert beam.max_frequency == MAX_FREQUENCY
+    assert beam.max_freq == MAX_FREQ
 
 
 def test_beam_copies_filling_scheme():
@@ -240,7 +240,7 @@ def test_beam_rejects_non_relativistic():
 
 def test_beam_profile_warns_on_coarse_sampling():
     # analytic spectrum is not affected by sampling, only the time-domain profile is
-    beam = make_beam(max_frequency=100e6)
+    beam = make_beam(max_freq=100e6)
     beam.get_spectrum()
     with pytest.warns(AccuracyWarning, match='too coarse'):
         beam.get_profile()
@@ -261,7 +261,7 @@ def test_beam_profile(bunch):
     beam = make_beam(bunch=bunch)
     t, current = beam.get_profile()
 
-    dt = 1 / (2 * MAX_FREQUENCY)
+    dt = 1 / (2 * MAX_FREQ)
     assert len(t) == 1000
     np.testing.assert_allclose(np.diff(t), dt)
     assert t[0] == pytest.approx(-beam.bucket_length / 2)
@@ -292,17 +292,17 @@ def test_beam_spectrum_lines_at_revolution_harmonics(method):
     beam = make_beam()
     f, spectrum = getattr(beam, method)()
     np.testing.assert_allclose(f, F_REV * np.arange(len(f)))
-    assert f[-1] == pytest.approx(MAX_FREQUENCY)
+    assert f[-1] == pytest.approx(MAX_FREQ)
     assert spectrum[0] == pytest.approx(beam.charge, rel=1e-9)
 
 
-@pytest.mark.parametrize('max_frequency, max_harmonic', [
+@pytest.mark.parametrize('max_freq, max_harmonic', [
     (500e6, 500),
     (500.7e6, 500),
     (499.3e6, 499),
 ])
-def test_beam_spectrum_up_to_max_frequency(max_frequency, max_harmonic):
-    f, _ = make_beam(max_frequency=max_frequency).get_spectrum()
+def test_beam_spectrum_up_to_max_freq(max_freq, max_harmonic):
+    f, _ = make_beam(max_freq=max_freq).get_spectrum()
     assert len(f) == max_harmonic + 1
 
 
@@ -356,7 +356,7 @@ def test_uniformly_filled_beam_spectrum_only_at_bunch_harmonics(method):
 
 def broadband_impedance(beam: Beam, resistance: float) -> tuple[np.ndarray, np.ndarray]:
     """Constant real impedance that excludes DC (starts above 0 Hz)."""
-    f = np.linspace(beam.revolution_frequency / 2, MAX_FREQUENCY, 2000)
+    f = np.linspace(beam.revolution_freq / 2, MAX_FREQ, 2000)
     return f, np.full(len(f), resistance, dtype=complex)
 
 
@@ -376,7 +376,7 @@ def test_power_loss_matches_parseval_including_dc():
     beam = make_beam()
     resistance = 100.0 # Ohm
     _, current = beam.get_profile()
-    f = np.linspace(0, MAX_FREQUENCY, 2000)
+    f = np.linspace(0, MAX_FREQ, 2000)
     power = beam.get_power_loss(f, np.full(len(f), resistance, dtype=complex))
     assert power == pytest.approx(resistance * np.mean(current**2), rel=1e-6)
 
@@ -419,7 +419,7 @@ def test_power_loss_unknown_negative_handling():
 
 def test_power_loss_warns_on_coarse_impedance():
     beam = make_beam()
-    f = np.linspace(0, MAX_FREQUENCY, 21)
+    f = np.linspace(0, MAX_FREQ, 21)
     with pytest.warns(AccuracyWarning, match='coarser than revolution frequency'):
         beam.get_power_loss(f, np.ones(len(f), dtype=complex))
 
@@ -434,7 +434,7 @@ def test_power_loss_warns_on_impedance_not_covering_bunch_spectrum():
 
 def test_power_loss_warns_on_beam_not_covering_bunch_spectrum():
     # Gaussian bunch spectrum at 50 MHz is still 0.29 of DC
-    beam = make_beam(max_frequency=50e6)
+    beam = make_beam(max_freq=50e6)
     with pytest.warns(AccuracyWarning, match='maximum frequency of the beam'):
         beam.get_power_loss(*broadband_impedance(beam, 100.0))
 
@@ -447,7 +447,7 @@ def test_shifted_power_loss_matches_brute_force():
     impedance = rng.uniform(1, 100, size=len(f)).astype(complex)
     num_harmonics = len(f)
     shifts, powers = beam.get_shifted_power_loss(
-        f, impedance, max_frequency_shift=(num_harmonics + 2) * F_REV
+        f, impedance, max_freq_shift=(num_harmonics + 2) * F_REV
     )
 
     squared_current = F_REV**2 * np.abs(beam_spectrum)**2
@@ -468,7 +468,7 @@ def test_shifted_power_loss():
     resistance, m = 1e4, 100
     impedance = np.zeros(len(f), dtype=complex)
     impedance[m] = resistance
-    shifts, powers = beam.get_shifted_power_loss(f, impedance, max_frequency_shift=3.5 * F_REV)
+    shifts, powers = beam.get_shifted_power_loss(f, impedance, max_freq_shift=3.5 * F_REV)
 
     steps = np.arange(-4, 5)
     np.testing.assert_allclose(shifts, steps * F_REV)

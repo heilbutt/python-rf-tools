@@ -35,8 +35,8 @@ def _get_uniform_step(
 
     # mean step is more robust than the first difference for rounded (e.g. exported) data
     step = float(array[-1] - array[0]) / (len(array) - 1)
-    uniform_array = array[0] + step * np.arange(len(array))
-    if not np.allclose(array, uniform_array, rtol=0, atol=tolerance * abs(step)):
+    uniform = array[0] + step * np.arange(len(array))
+    if not np.allclose(array, uniform, rtol=0, atol=tolerance * abs(step)):
         raise ValueError('Axis must be equidistant')
 
     return step
