@@ -12,4 +12,5 @@ __pycache__/
 
 .sys.v*/
 
+.DS_Storedocs/superpowers/
 .DS_Store
