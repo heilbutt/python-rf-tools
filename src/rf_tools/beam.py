@@ -82,11 +82,11 @@ class Bunch(ABC):
 
     def _get_form_factor_envelope(
         self,
-        frequency: float # Hz
+        f: float # Hz
     ) -> float:
 
-        # largest form factor at and above `frequency`, assuming monotonic decay
-        return float(np.abs(self.get_form_factor(np.array([frequency]))[0]))
+        # largest form factor at and above `f`, assuming monotonic decay
+        return float(np.abs(self.get_form_factor(np.array([f]))[0]))
 
     def _get_internal_time_array(
         self,
@@ -270,19 +270,19 @@ class BinomialBunch(Bunch):
 
     def _get_form_factor_envelope(
         self,
-        frequency: float # Hz
+        f: float # Hz
     ) -> float:
 
-        # form factor has zeros, so take the maximum over two oscillation periods above `frequency`
-        f = frequency + np.linspace(0, 2 / self.full_length, 65)
-        return float(np.max(np.abs(self.get_form_factor(f))))
+        # form factor has zeros, so take the maximum over two oscillation periods above `f`
+        f_window = f + np.linspace(0, 2 / self.full_length, 65)
+        return float(np.max(np.abs(self.get_form_factor(f_window))))
 
 
 @dataclass(frozen=True) # immutable, spectra and profiles are recomputed on demand
 class Beam:
 
     circumference: float # m
-    max_frequency: float # Hz
+    f_max: float # Hz
     filling_scheme: Sequence[bool] = field(repr=False) # stored as tuple, one entry per bucket
     bunch: Bunch # identical for all filled buckets
     beta: float = 1.0
@@ -339,182 +339,182 @@ class Beam:
 
         # generate time axis centered for one bucket (t = 0 at bucket center)
         # with sampling such that the concatenated time-axis is equidistant
-        delta_t = 1 / (2 * self.max_frequency)
-        num_samples_per_bucket = ceil(self.bucket_length / delta_t)
+        dt = 1 / (2 * self.f_max)
+        num_samples_per_bucket = ceil(self.bucket_length / dt)
         
         # time axis for one bunch
-        bunch_time_array = np.linspace(
+        t_bunch = np.linspace(
             start=-self.bucket_length/2, stop=self.bucket_length/2,
             num=num_samples_per_bucket, endpoint=False
         )
         self.bunch._check_sampling(
-            dt=float(bunch_time_array[1] - bunch_time_array[0]),
+            dt=float(t_bunch[1] - t_bunch[0]),
             half_window=self.bucket_length / 2
         )
 
-        bunch_profile = self.bunch.get_profile(bunch_time_array) # A
+        bunch_profile = self.bunch.get_profile(t_bunch) # A
 
         logger.info(f'Generating beam profile: {self.harmonic_number} buckets ({self.num_bunches} filled), {num_samples_per_bucket} samples/bucket, {self.harmonic_number*num_samples_per_bucket} total samples')
 
         # one row per bucket, filled buckets contain the bunch profile, empty ones zeros
         bucket_start_times = self.bucket_length * np.arange(self.harmonic_number) # s
-        beam_time_array = np.add.outer(bucket_start_times, bunch_time_array).ravel() # s
-        beam_profile = np.outer(np.asarray(self.filling_scheme, dtype=float), bunch_profile).ravel() # A
+        t = np.add.outer(bucket_start_times, t_bunch).ravel() # s
+        profile = np.outer(np.asarray(self.filling_scheme, dtype=float), bunch_profile).ravel() # A
 
         return (
-            beam_time_array, # s
-            beam_profile # A
+            t, # s
+            profile # A
         )
 
     def _get_harmonic_numbers(self) -> np.ndarray[tuple[int], np.dtype[np.int_]]:
 
         # revolution harmonics up to the maximum frequency (tolerance for rounding errors)
-        max_harmonic = floor(self.max_frequency / self.revolution_frequency * (1 + 1e-9))
-        return np.arange(max_harmonic + 1)
+        n_max = floor(self.f_max / self.revolution_frequency * (1 + 1e-9))
+        return np.arange(n_max + 1)
 
     def get_spectrum(self) -> tuple[Real1dArray, Complex1dArray]:
 
-        harmonic_array = self._get_harmonic_numbers()
-        frequency_array = harmonic_array * self.revolution_frequency # Hz
+        n = self._get_harmonic_numbers()
+        f = n * self.revolution_frequency # Hz
 
-        logger.info(f'Computing beam spectrum: {len(frequency_array)} revolution harmonics up to {format_quantity(frequency_array[-1], "Hz")}')
+        logger.info(f'Computing beam spectrum: {len(f)} revolution harmonics up to {format_quantity(f[-1], "Hz")}')
 
         # bunch in bucket k is delayed by k bucket lengths, i.e. by a phase of -2 pi n k / h at harmonic n,
         # so the filling pattern contributes its discrete Fourier transform, periodic in n with period h
         filling_pattern_spectrum: Complex1dArray = np.fft.fft(np.asarray(self.filling_scheme, dtype=float))
-        spectrum_array = (
+        spectrum = (
             self.bunch.charge
-            * self.bunch.get_form_factor(frequency_array)
-            * filling_pattern_spectrum[harmonic_array % self.harmonic_number]
+            * self.bunch.get_form_factor(f)
+            * filling_pattern_spectrum[n % self.harmonic_number]
         ) # C
 
         return (
-            frequency_array, # Hz
-            spectrum_array # C
+            f, # Hz
+            spectrum # C
         )
 
     def _get_squared_spectrum(self) -> tuple[Real1dArray, Real1dArray]:
 
         # |spectrum|^2 for power calculations, avoids the complex spectrum to save memory
-        harmonic_array = self._get_harmonic_numbers()
-        frequency_array = harmonic_array * self.revolution_frequency # Hz
+        n = self._get_harmonic_numbers()
+        f = n * self.revolution_frequency # Hz
 
         filling_pattern_power = np.abs(np.fft.fft(np.asarray(self.filling_scheme, dtype=float)))**2
 
         # in-place operations to avoid temporary arrays
-        squared_spectrum = self.bunch.get_form_factor(frequency_array)
+        squared_spectrum = self.bunch.get_form_factor(f)
         squared_spectrum **= 2
         squared_spectrum *= self.bunch.charge**2
-        squared_spectrum *= filling_pattern_power[harmonic_array % self.harmonic_number] # C^2
+        squared_spectrum *= filling_pattern_power[n % self.harmonic_number] # C^2
 
         return (
-            frequency_array, # Hz
+            f, # Hz
             squared_spectrum # C^2
         )
 
     def get_numeric_spectrum(self) -> tuple[Real1dArray, Complex1dArray]:
 
         # FFT of the sampled beam profile, reference for `get_spectrum`
-        beam_time_array, beam_profile = self.get_profile() # A
-        time_step = beam_time_array[1] - beam_time_array[0]
+        t, profile = self.get_profile() # A
+        dt = t[1] - t[0]
 
-        logger.info(f'Computing numeric beam spectrum: {len(beam_profile)} samples, frequency resolution {format_quantity(self.revolution_frequency, "Hz")}')
+        logger.info(f'Computing numeric beam spectrum: {len(profile)} samples, frequency resolution {format_quantity(self.revolution_frequency, "Hz")}')
 
-        spectrum_array = time_step * np.fft.rfft(beam_profile) # C
-        frequency_array = np.fft.rfftfreq(len(beam_profile), time_step) # Hz
+        spectrum = dt * np.fft.rfft(profile) # C
+        f = np.fft.rfftfreq(len(profile), dt) # Hz
 
         # correct for non-zero start time, so that t = 0 is at the centre of the first bucket
-        spectrum_array *= np.exp(-2j * pi * frequency_array * beam_time_array[0])
+        spectrum *= np.exp(-2j * pi * f * t[0])
 
         return (
-            frequency_array, # Hz
-            spectrum_array # C
+            f, # Hz
+            spectrum # C
         )
 
     def _get_real_impedance_at_beam_frequencies(
         self,
-        beam_freq: Real1dArray, # Hz
-        frequency_array: Real1dArray, # Hz
-        impedance_array: Complex1dArray, # Ohm
-        negative_real_impedance_handling: NegativeImpedanceHandling
+        f_beam: Real1dArray, # Hz
+        f: Real1dArray, # Hz
+        z: Complex1dArray, # Ohm
+        on_negative_impedance: NegativeImpedanceHandling
     ) -> Real1dArray:
 
-        max_impedance_delta_f = float(np.max(np.diff(frequency_array)))
-        if (max_impedance_delta_f > self.revolution_frequency):
+        max_df = float(np.max(np.diff(f)))
+        if (max_df > self.revolution_frequency):
             warnings.warn(
-                f'Impedance frequency resolution {format_quantity(max_impedance_delta_f, "Hz")} is coarser than revolution frequency {format_quantity(self.revolution_frequency, "Hz")}, narrow-band features may be missed',
+                f'Impedance frequency resolution {format_quantity(max_df, "Hz")} is coarser than revolution frequency {format_quantity(self.revolution_frequency, "Hz")}, narrow-band features may be missed',
                 AccuracyWarning, stacklevel=3
             )
 
         # power is only summed up to the highest revolution harmonic of the beam spectrum,
         # and the impedance is assumed zero above its highest frequency
-        max_frequency = min(float(beam_freq[-1]), float(frequency_array[-1])) # Hz
-        form_factor = self.bunch._get_form_factor_envelope(max_frequency)
+        f_upper = min(float(f_beam[-1]), float(f[-1])) # Hz
+        form_factor = self.bunch._get_form_factor_envelope(f_upper)
         if form_factor > _MAX_FORM_FACTOR:
-            limited_by = 'maximum frequency of the beam' if beam_freq[-1] < frequency_array[-1] else 'highest impedance frequency'
+            limited_by = 'maximum frequency of the beam' if f_beam[-1] < f[-1] else 'highest impedance frequency'
             warnings.warn(
-                f'Power loss only summed up to {format_quantity(max_frequency, "Hz")} ({limited_by}), where the bunch spectrum is still {form_factor:.1e} of DC. Power loss at higher frequencies is neglected',
+                f'Power loss only summed up to {format_quantity(f_upper, "Hz")} ({limited_by}), where the bunch spectrum is still {form_factor:.1e} of DC. Power loss at higher frequencies is neglected',
                 AccuracyWarning, stacklevel=3
             )
 
-        real_impedance_at_beam_freq = np.interp(
-            x=beam_freq,
-            xp=frequency_array,
-            fp=np.real(impedance_array),
+        real_z_at_f_beam = np.interp(
+            x=f_beam,
+            xp=f,
+            fp=np.real(z),
             left=0.0, right=0.0
         ) # Ohm
 
-        if negative_real_impedance_handling == 'clip':
-            real_impedance_at_beam_freq = np.clip(real_impedance_at_beam_freq, min=0, max=None)
-        elif negative_real_impedance_handling == 'abs':
-            real_impedance_at_beam_freq = np.abs(real_impedance_at_beam_freq)
-        elif negative_real_impedance_handling == 'raise':
-            num_negative = int(np.sum(real_impedance_at_beam_freq < 0))
+        if on_negative_impedance == 'clip':
+            real_z_at_f_beam = np.clip(real_z_at_f_beam, min=0, max=None)
+        elif on_negative_impedance == 'abs':
+            real_z_at_f_beam = np.abs(real_z_at_f_beam)
+        elif on_negative_impedance == 'raise':
+            num_negative = int(np.sum(real_z_at_f_beam < 0))
             if num_negative > 0:
-                raise ValueError(f'Real part of impedance is negative at {num_negative} ({100*num_negative/len(real_impedance_at_beam_freq):.1f} %) of the beam spectral lines')
-        elif negative_real_impedance_handling == 'ignore':
+                raise ValueError(f'Real part of impedance is negative at {num_negative} ({100*num_negative/len(real_z_at_f_beam):.1f} %) of the beam spectral lines')
+        elif on_negative_impedance == 'ignore':
             pass
         else:
-            raise ValueError(f'Unknown handling of negative impedance real part: `{negative_real_impedance_handling}`')
+            raise ValueError(f'Unknown handling of negative impedance real part: `{on_negative_impedance}`')
 
-        return real_impedance_at_beam_freq # Ohm
+        return real_z_at_f_beam # Ohm
 
     def get_power_loss_spectrum(
         self,
-        frequency_array: Real1dArray, # Hz
-        impedance_array: Complex1dArray, # Ohm
-        negative_real_impedance_handling: NegativeImpedanceHandling = 'raise'
+        f: Real1dArray, # Hz
+        z: Complex1dArray, # Ohm
+        on_negative_impedance: NegativeImpedanceHandling = 'raise'
     ) -> tuple[Real1dArray, Real1dArray]:
 
-        beam_freq, squared_beam_spectrum = self._get_squared_spectrum() # Hz, C^2
-        real_impedance_at_beam_freq = self._get_real_impedance_at_beam_frequencies(
-            beam_freq=beam_freq,
-            frequency_array=frequency_array,
-            impedance_array=impedance_array,
-            negative_real_impedance_handling=negative_real_impedance_handling
+        f_beam, squared_beam_spectrum = self._get_squared_spectrum() # Hz, C^2
+        real_z_at_f_beam = self._get_real_impedance_at_beam_frequencies(
+            f_beam=f_beam,
+            f=f,
+            z=z,
+            on_negative_impedance=on_negative_impedance
         ) # Ohm
 
         power_loss_spectrum = (
             self.revolution_frequency**2
-            * squared_beam_spectrum * real_impedance_at_beam_freq
+            * squared_beam_spectrum * real_z_at_f_beam
         ) # Hz^2 * C^2 * Ohm = W
 
         return (
-            beam_freq, # Hz
+            f_beam, # Hz
             power_loss_spectrum # W
         )
 
     def get_power_loss(
         self,
-        frequency_array: Real1dArray, # Hz
-        impedance_array: Complex1dArray, # Ohm
-        negative_real_impedance_handling: NegativeImpedanceHandling = 'raise',
+        f: Real1dArray, # Hz
+        z: Complex1dArray, # Ohm
+        on_negative_impedance: NegativeImpedanceHandling = 'raise',
     ) -> float:
 
         _, power_loss_spectrum = self.get_power_loss_spectrum(
-            frequency_array=frequency_array,
-            impedance_array=impedance_array,
-            negative_real_impedance_handling=negative_real_impedance_handling
+            f=f,
+            z=z,
+            on_negative_impedance=on_negative_impedance
         ) # W
         # positive and negative frequencies contribute equally, except for DC
         power_loss = 2 * float(np.sum(power_loss_spectrum)) - float(power_loss_spectrum[0]) # W
@@ -523,54 +523,54 @@ class Beam:
 
     def get_shifted_power_loss(
         self,
-        frequency_array: Real1dArray, # Hz
-        value_array: Complex1dArray, # Ohm
-        max_frequency_shift: float, # Hz
-        negative_real_impedance_handling: NegativeImpedanceHandling = 'raise'
+        f: Real1dArray, # Hz
+        z: Complex1dArray, # Ohm
+        max_shift: float, # Hz
+        on_negative_impedance: NegativeImpedanceHandling = 'raise'
     ) -> tuple[Real1dArray, Real1dArray]:
 
-        beam_freq, squared_beam_spectrum = self._get_squared_spectrum() # Hz, C^2
-        real_impedance_at_beam_freq = self._get_real_impedance_at_beam_frequencies(
-            beam_freq=beam_freq,
-            frequency_array=frequency_array,
-            impedance_array=value_array,
-            negative_real_impedance_handling=negative_real_impedance_handling
+        f_beam, squared_beam_spectrum = self._get_squared_spectrum() # Hz, C^2
+        real_z_at_f_beam = self._get_real_impedance_at_beam_frequencies(
+            f_beam=f_beam,
+            f=f,
+            z=z,
+            on_negative_impedance=on_negative_impedance
         ) # Ohm
 
-        frequency_step = beam_freq[1] - beam_freq[0]
-        max_step = ceil(max_frequency_shift / frequency_step)
+        df = f_beam[1] - f_beam[0]
+        max_step = ceil(max_shift / df)
         shift_steps = np.arange(-max_step, max_step + 1)
         num_harmonics = len(squared_beam_spectrum)
 
-        logger.info(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_frequency_shift, "Hz")} in steps of {format_quantity(frequency_step, "Hz")} ({len(shift_steps)} steps)')
+        logger.info(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_shift, "Hz")} in steps of {format_quantity(df, "Hz")} ({len(shift_steps)} steps)')
 
         # impedance shifted by s harmonics is Z[n - s] at harmonic n, zero outside of the array, so the
         # power loss is a cross-correlation: sum_n S[n] Z[n - s], computed for all shifts at once via FFT.
         # Circular correlation of length >= num_harmonics + max_step is exact for |s| <= max_step
         fft_length = next_fast_len(num_harmonics + max_step, real=True)
         correlation_spectrum = rfft(squared_beam_spectrum, n=fft_length)
-        correlation_spectrum *= np.conj(rfft(real_impedance_at_beam_freq, n=fft_length))
+        correlation_spectrum *= np.conj(rfft(real_z_at_f_beam, n=fft_length))
         correlation = irfft(correlation_spectrum, n=fft_length) # C^2 * Ohm, shift s at index s mod fft_length
 
         # positive and negative frequencies contribute equally, except for DC,
         # where the shifted impedance is Z[-s] for s <= 0 and zero otherwise
         dc_impedance = np.where(
             (shift_steps <= 0) & (-shift_steps < num_harmonics),
-            real_impedance_at_beam_freq[np.clip(-shift_steps, 0, num_harmonics - 1)],
+            real_z_at_f_beam[np.clip(-shift_steps, 0, num_harmonics - 1)],
             0.0
         ) # Ohm
-        power_losses = self.revolution_frequency**2 * (
+        power_loss = self.revolution_frequency**2 * (
             2 * correlation[shift_steps % fft_length]
             - squared_beam_spectrum[0] * dc_impedance
         ) # Hz^2 * C^2 * Ohm = W
 
         logger.info('Power loss calculation results:')
-        logger.info(f'  max:    {format_quantity(max(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmax(power_losses)] * frequency_step, "Hz"):>12}')
-        logger.info(f'  min:    {format_quantity(min(power_losses), "W"):>12} at shift {format_quantity(shift_steps[np.argmin(power_losses)] * frequency_step, "Hz"):>12}')
-        logger.info(f'  mean:   {format_quantity(float(np.mean(power_losses)), "W"):>12}')
-        logger.info(f'  median: {format_quantity(float(np.median(power_losses)), "W"):>12}')
+        logger.info(f'  max:    {format_quantity(max(power_loss), "W"):>12} at shift {format_quantity(shift_steps[np.argmax(power_loss)] * df, "Hz"):>12}')
+        logger.info(f'  min:    {format_quantity(min(power_loss), "W"):>12} at shift {format_quantity(shift_steps[np.argmin(power_loss)] * df, "Hz"):>12}')
+        logger.info(f'  mean:   {format_quantity(float(np.mean(power_loss)), "W"):>12}')
+        logger.info(f'  median: {format_quantity(float(np.median(power_loss)), "W"):>12}')
         
         return (
-            frequency_step * shift_steps, # Hz
-            power_losses # W
+            df * shift_steps, # Hz
+            power_loss # W
         )
