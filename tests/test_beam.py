@@ -75,11 +75,11 @@ def test_bunch_profile_charge_and_rms(bunch):
     assert rms == pytest.approx(SIGMA, rel=1e-4)
 
 
-@pytest.mark.parametrize('exponent', [0.0, 0.5, 1.5, 4.0])
-def test_binomial_profile_has_finite_support(exponent):
-    bunch = BinomialBunch(1, SIGMA, exponent)
-    half_length = SIGMA * np.sqrt(3 + 2 * exponent)
-    assert bunch.full_bunch_length == pytest.approx(2 * half_length)
+@pytest.mark.parametrize('mu', [0.0, 0.5, 1.5, 4.0])
+def test_binomial_profile_has_finite_support(mu):
+    bunch = BinomialBunch(1, SIGMA, mu)
+    half_length = SIGMA * np.sqrt(3 + 2 * mu)
+    assert bunch.full_length == pytest.approx(2 * half_length)
     t = np.linspace(-2 * half_length, 2 * half_length, 1001)
     current = bunch.get_profile(t)
     assert np.all(current[np.abs(t) > half_length] == 0)
@@ -88,7 +88,7 @@ def test_binomial_profile_has_finite_support(exponent):
 
 @pytest.mark.parametrize('bunch', BUNCHES)
 def test_bunch_form_factor_matches_numerical_spectrum(bunch):
-    f, spectrum = bunch.get_numeric_spectrum(max_frequency=2e9, frequency_step=1e6)
+    f, spectrum = bunch.get_numeric_spectrum(f_max=2e9, df=1e6)
     # numerical spectrum of the binomial bunch converges slowly, due to its sharp edges
     np.testing.assert_allclose(
         BUNCH_CHARGE * bunch.get_form_factor(f), spectrum, atol=1e-4 * BUNCH_CHARGE
@@ -110,7 +110,7 @@ def test_bunch_half_width_and_truncated_charge(bunch, fraction):
     if isinstance(bunch, GaussianBunch):
         assert bunch.get_truncated_charge_fraction(half_width) == pytest.approx(fraction, rel=1e-6)
     else:
-        assert half_width <= bunch.full_bunch_length / 2
+        assert half_width <= bunch.full_length / 2
         assert bunch.get_truncated_charge_fraction(half_width) == pytest.approx(fraction, rel=1e-3)
 
     # cross-check with numerical integration
@@ -121,23 +121,23 @@ def test_bunch_half_width_and_truncated_charge(bunch, fraction):
 
 def test_binomial_truncated_charge_is_zero_outside_support():
     bunch = BinomialBunch(1, SIGMA, 1.5)
-    assert bunch.get_truncated_charge_fraction(bunch.full_bunch_length / 2) == 0
+    assert bunch.get_truncated_charge_fraction(bunch.full_length / 2) == 0
     assert bunch.get_truncated_charge_fraction(10 * SIGMA) == 0
 
 
 @pytest.mark.parametrize('bunch', BUNCHES)
 def test_bunch_numeric_spectrum_warns_on_coarse_sampling(bunch):
     # 1 ns time step, i.e. 5 samples per sigma, is fine
-    bunch.get_numeric_spectrum(max_frequency=500e6, frequency_step=1e6)
+    bunch.get_numeric_spectrum(f_max=500e6, df=1e6)
     # 5 ns time step, i.e. 1 sample per sigma, makes the bunch look like a triangle
     with pytest.warns(AccuracyWarning, match='too coarse'):
-        bunch.get_numeric_spectrum(max_frequency=100e6, frequency_step=1e6)
+        bunch.get_numeric_spectrum(f_max=100e6, df=1e6)
 
 
 def test_bunch_numeric_spectrum_warns_on_truncated_window():
     # 1 / frequency_step = 20 ns, i.e. +/- 2 sigma
     with pytest.warns(AccuracyWarning, match='truncates'):
-        GAUSSIAN_BUNCH.get_numeric_spectrum(max_frequency=1e9, frequency_step=50e6)
+        GAUSSIAN_BUNCH.get_numeric_spectrum(f_max=1e9, df=50e6)
 
 
 def test_bunch_loss_factor_warns_on_coarse_wake():
@@ -148,7 +148,7 @@ def test_bunch_loss_factor_warns_on_coarse_wake():
 
 @pytest.mark.parametrize('bunch', BUNCHES)
 def test_bunch_numeric_spectrum_dc_equals_charge(bunch):
-    f, spectrum = bunch.get_numeric_spectrum(max_frequency=1e9, frequency_step=1e6)
+    f, spectrum = bunch.get_numeric_spectrum(f_max=1e9, df=1e6)
     assert f[0] == 0
     assert f[1] - f[0] == pytest.approx(1e6)
     assert spectrum[0] == pytest.approx(BUNCH_CHARGE, rel=1e-9)
@@ -156,7 +156,7 @@ def test_bunch_numeric_spectrum_dc_equals_charge(bunch):
 
 def test_gaussian_bunch_numeric_spectrum():
     # bunch centred at t = 0, so the spectrum is real and positive
-    f, spectrum = GAUSSIAN_BUNCH.get_numeric_spectrum(max_frequency=1e9, frequency_step=1e6)
+    f, spectrum = GAUSSIAN_BUNCH.get_numeric_spectrum(f_max=1e9, df=1e6)
     expected = BUNCH_CHARGE * np.exp(-0.5 * (2 * pi * f * SIGMA)**2)
     np.testing.assert_allclose(spectrum, expected, atol=1e-9 * BUNCH_CHARGE)
 
@@ -171,9 +171,9 @@ def test_bunch_loss_factor_constant_wake(bunch):
 def test_bunch_loss_factor_pads_short_wake_with_zeros():
     # wake potential only given for t >= 0: half of a symmetric bunch sees it
     t = np.linspace(0, 10 * SIGMA, 1001)
-    wake = np.ones_like(t)
-    wake[0] = 0.5 # mid-point of the step, so that the trapezoidal rule is exact
-    assert GAUSSIAN_BUNCH.get_loss_factor(t, wake) == pytest.approx(0.5, rel=1e-6)
+    w = np.ones_like(t)
+    w[0] = 0.5 # mid-point of the step, so that the trapezoidal rule is exact
+    assert GAUSSIAN_BUNCH.get_loss_factor(t, w) == pytest.approx(0.5, rel=1e-6)
 
 
 def test_bunch_loss_factor_rejects_non_equidistant_time():

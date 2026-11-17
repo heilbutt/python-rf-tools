@@ -110,8 +110,8 @@ def convolve_wake(
         charge=1,
         sigma=sqrt(target_sigma**2 - wake_sigma**2)
     )
-    bunch._check_sampling(time_step=dt)
-    t_bunch = bunch._get_internal_time_array(time_step=dt)
+    bunch._check_sampling(dt=dt)
+    t_bunch = bunch._get_internal_time_array(dt=dt)
     bunch_profile = bunch.get_profile(t_bunch)
 
     logger.info(f'Convolving wake: input sigma = {wake_sigma*1e9:.2f} ns ({wake_sigma*c*1e3:.2f} mm), output sigma = {target_sigma*1e9:.2f} ns ({target_sigma*c*1e3:.2f} mm)')

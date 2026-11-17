@@ -48,14 +48,14 @@ class Bunch(ABC):
     @abstractmethod
     def _get_normalized_profile(
         self,
-        time_array: Real1dArray # s
+        t: Real1dArray # s
     ) -> Real1dArray:
         """Bunch profile centred at t = 0, normalized to unit integral."""
 
     @abstractmethod
     def get_form_factor(
         self,
-        frequency_array: Real1dArray # Hz
+        f: Real1dArray # Hz
     ) -> Real1dArray:
         """Analytic bunch spectrum for a bunch centred at t = 0, normalized to unity at DC."""
 
@@ -75,10 +75,10 @@ class Bunch(ABC):
 
     def get_profile(
         self,
-        time_array: Real1dArray # s
+        t: Real1dArray # s
     ) -> Real1dArray:
 
-        return self.charge * self._get_normalized_profile(time_array) # A
+        return self.charge * self._get_normalized_profile(t) # A
 
     def _get_form_factor_envelope(
         self,
@@ -90,27 +90,27 @@ class Bunch(ABC):
 
     def _get_internal_time_array(
         self,
-        time_step: float # s
+        dt: float # s
     ) -> Real1dArray:
 
         # symmetric time axis that contains t = 0 and covers the entire bunch
-        num_half = ceil(self.get_half_width(_MAX_TRUNCATED_CHARGE_INTERNAL) / time_step)
-        return time_step * np.arange(-num_half, num_half + 1) # s
+        num_half = ceil(self.get_half_width(_MAX_TRUNCATED_CHARGE_INTERNAL) / dt)
+        return dt * np.arange(-num_half, num_half + 1) # s
 
     def _check_sampling(
         self,
-        time_step: float, # s
+        dt: float, # s
         half_window: float | None = None, # s
         stacklevel: int = 3
     ) -> None:
 
         # bunch spectrum above the Nyquist frequency is aliased
-        nyquist_frequency = 1 / (2 * time_step)
-        form_factor = self._get_form_factor_envelope(nyquist_frequency)
+        f_nyquist = 1 / (2 * dt)
+        form_factor = self._get_form_factor_envelope(f_nyquist)
         if form_factor > _MAX_FORM_FACTOR:
             warnings.warn(
-                f'Time step {format_quantity(time_step, "s")} is too coarse for {type(self).__name__} with sigma {format_quantity(self.sigma, "s")} ({self.sigma / time_step:.2f} samples per sigma): '
-                f'bunch spectrum at Nyquist frequency {format_quantity(nyquist_frequency, "Hz")} is {form_factor:.1e} of DC and will be aliased. Reduce the time step (increase the maximum frequency)',
+                f'Time step {format_quantity(dt, "s")} is too coarse for {type(self).__name__} with sigma {format_quantity(self.sigma, "s")} ({self.sigma / dt:.2f} samples per sigma): '
+                f'bunch spectrum at Nyquist frequency {format_quantity(f_nyquist, "Hz")} is {form_factor:.1e} of DC and will be aliased. Reduce the time step (increase the maximum frequency)',
                 AccuracyWarning, stacklevel=stacklevel
             )
 
@@ -125,56 +125,56 @@ class Bunch(ABC):
 
     def get_numeric_spectrum(
         self,
-        max_frequency: float, # Hz
-        frequency_step: float # Hz
+        f_max: float, # Hz
+        df: float # Hz
     ) -> tuple[Real1dArray, Complex1dArray]:
 
         # FFT of the sampled profile, reference for `charge * get_form_factor`
-        time_period = 1 / frequency_step
-        time_step = 1 / (2 * max_frequency)
-        self._check_sampling(time_step=time_step, half_window=time_period/2)
+        period = 1 / df
+        dt = 1 / (2 * f_max)
+        self._check_sampling(dt=dt, half_window=period/2)
 
-        num_samples = round(time_period / time_step)
-        time_array = np.linspace(
-            start=-time_period/2, stop=time_period/2, num=num_samples, endpoint=False
+        num_samples = round(period / dt)
+        t = np.linspace(
+            start=-period/2, stop=period/2, num=num_samples, endpoint=False
         )
 
-        profile = self.get_profile(time_array)
-        spectrum_array = np.fft.rfft(profile) * time_step
-        frequency_array = np.fft.rfftfreq(len(profile), time_step)
+        profile = self.get_profile(t)
+        spectrum = np.fft.rfft(profile) * dt
+        f = np.fft.rfftfreq(len(profile), dt)
 
         # correct for non-zero start time, so that t = 0 is at the bunch centre
-        spectrum_array *= np.exp(-2j * pi * frequency_array * time_array[0])
+        spectrum *= np.exp(-2j * pi * f * t[0])
 
         return (
-            frequency_array, # Hz
-            spectrum_array # C
+            f, # Hz
+            spectrum # C
         )
 
     def get_loss_factor(
         self,
-        time_array: Real1dArray, # s
-        wake_array: Real1dArray, # V/C/m^p
+        t: Real1dArray, # s
+        w: Real1dArray, # V/C/m^p
     ) -> float:
 
-        dt = _get_uniform_step(time_array)
-        self._check_sampling(time_step=dt)
+        dt = _get_uniform_step(t)
+        self._check_sampling(dt=dt)
 
         # extend wake time axis with zeros to cover the entire bunch
         extent = self.get_half_width(_MAX_TRUNCATED_CHARGE_INTERNAL) # s
-        num_before = max(0, ceil((time_array[0] + extent) / dt))
-        num_after = max(0, ceil((extent - time_array[-1]) / dt))
-        time_array = time_array[0] + dt * np.arange(
-            -num_before, len(time_array) + num_after
+        num_before = max(0, ceil((t[0] + extent) / dt))
+        num_after = max(0, ceil((extent - t[-1]) / dt))
+        t = t[0] + dt * np.arange(
+            -num_before, len(t) + num_after
         ) # s
-        wake_potential = np.pad(wake_array, (num_before, num_after)) # V/C
+        w = np.pad(w, (num_before, num_after)) # V/C
 
-        profile = self._get_normalized_profile(time_array) # 1/s
+        profile = self._get_normalized_profile(t) # 1/s
 
         # convention: positive wake is decelerating <-> positive loss factor
-        loss_factor = float(np.trapezoid(profile * wake_potential, time_array))
+        k = float(np.trapezoid(profile * w, t))
 
-        return loss_factor # V/C/m^p, same unit as wake
+        return k # V/C/m^p, same unit as wake
 
 
 @dataclass(frozen=True)
@@ -182,18 +182,18 @@ class GaussianBunch(Bunch):
 
     def _get_normalized_profile(
         self,
-        time_array: Real1dArray # s
+        t: Real1dArray # s
     ) -> Real1dArray:
 
         amplitude = 1 / (self.sigma * sqrt(2 * pi))
-        return amplitude * np.exp(-0.5 * (time_array / self.sigma) ** 2) # 1/s
+        return amplitude * np.exp(-0.5 * (t / self.sigma) ** 2) # 1/s
 
     def get_form_factor(
         self,
-        frequency_array: Real1dArray # Hz
+        f: Real1dArray # Hz
     ) -> Real1dArray:
 
-        return np.exp(-0.5 * (2 * pi * frequency_array * self.sigma)**2)
+        return np.exp(-0.5 * (2 * pi * f * self.sigma)**2)
 
     def get_truncated_charge_fraction(
         self,
@@ -213,38 +213,38 @@ class GaussianBunch(Bunch):
 @dataclass(frozen=True)
 class BinomialBunch(Bunch):
 
-    exponent: float # mu, 0 for uniform, -> infinity for gaussian distribution
+    mu: float # 0 for uniform, -> infinity for gaussian distribution
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if not self.exponent >= 0:
-            raise ValueError(f'Binomial exponent (mu) must be non-negative, got {self.exponent}')
+        if not self.mu >= 0:
+            raise ValueError(f'Binomial exponent mu must be non-negative, got {self.mu}')
 
     @property
-    def full_bunch_length(self) -> float:
-        return 2 * self.sigma * sqrt(3 + 2 * self.exponent) # s
+    def full_length(self) -> float:
+        return 2 * self.sigma * sqrt(3 + 2 * self.mu) # s
 
     def _get_normalized_profile(
         self,
-        time_array: Real1dArray # s
+        t: Real1dArray # s
     ) -> Real1dArray:
 
         amplitude = (
-            2 * gamma(1.5 + self.exponent)
-            / (self.full_bunch_length * sqrt(pi) * gamma(1 + self.exponent))
+            2 * gamma(1.5 + self.mu)
+            / (self.full_length * sqrt(pi) * gamma(1 + self.mu))
         )
-        profile = np.clip(1 - 4 * (time_array / self.full_bunch_length) ** 2, min=0, max=None) ** self.exponent
-        profile[np.abs(time_array) > self.full_bunch_length / 2] = 0
+        profile = np.clip(1 - 4 * (t / self.full_length) ** 2, min=0, max=None) ** self.mu
+        profile[np.abs(t) > self.full_length / 2] = 0
 
         return amplitude * profile # 1/s
 
     def get_form_factor(
         self,
-        frequency_array: Real1dArray # Hz
+        f: Real1dArray # Hz
     ) -> Real1dArray:
 
-        order = self.exponent + 0.5
-        x = np.abs(pi * frequency_array * self.full_bunch_length) # omega * full_bunch_length / 2
+        order = self.mu + 0.5
+        x = np.abs(pi * f * self.full_length) # omega * full_length / 2
         form_factor = np.ones_like(x)
         nonzero = x > 0
         form_factor[nonzero] = gamma(order + 1) * (x[nonzero] / 2)**(-order) * jv(order, x[nonzero])
@@ -256,16 +256,16 @@ class BinomialBunch(Bunch):
         half_window: float # s
     ) -> float:
 
-        u = min(1, 2 * half_window / self.full_bunch_length)
-        return float(1 - betainc(0.5, self.exponent + 1, u**2))
+        u = min(1, 2 * half_window / self.full_length)
+        return float(1 - betainc(0.5, self.mu + 1, u**2))
 
     def get_half_width(
         self,
         max_truncated_charge_fraction: float
     ) -> float:
 
-        return self.full_bunch_length / 2 * sqrt(float(
-            betaincinv(0.5, self.exponent + 1, 1 - max_truncated_charge_fraction)
+        return self.full_length / 2 * sqrt(float(
+            betaincinv(0.5, self.mu + 1, 1 - max_truncated_charge_fraction)
         )) # s
 
     def _get_form_factor_envelope(
@@ -274,8 +274,8 @@ class BinomialBunch(Bunch):
     ) -> float:
 
         # form factor has zeros, so take the maximum over two oscillation periods above `frequency`
-        frequency_array = frequency + np.linspace(0, 2 / self.full_bunch_length, 65)
-        return float(np.max(np.abs(self.get_form_factor(frequency_array))))
+        f = frequency + np.linspace(0, 2 / self.full_length, 65)
+        return float(np.max(np.abs(self.get_form_factor(f))))
 
 
 @dataclass(frozen=True) # immutable, spectra and profiles are recomputed on demand
@@ -348,7 +348,7 @@ class Beam:
             num=num_samples_per_bucket, endpoint=False
         )
         self.bunch._check_sampling(
-            time_step=float(bunch_time_array[1] - bunch_time_array[0]),
+            dt=float(bunch_time_array[1] - bunch_time_array[0]),
             half_window=self.bucket_length / 2
         )
 
