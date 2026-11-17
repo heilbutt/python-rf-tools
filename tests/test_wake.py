@@ -20,7 +20,7 @@ QUALITY_FACTORS = [0.6, 1, 5, 50]
 
 def wake_time_axis(resonator, start: float = 0.0) -> np.ndarray:
     """Time axis long enough for the resonator wake to decay below ~1e-8."""
-    decay_time = 1 / resonator.damping_coefficient
+    decay_time = 1 / resonator.alpha
     return np.arange(start, 20 * decay_time, DT)
 
 
@@ -29,40 +29,45 @@ def wake_time_axis(resonator, start: float = 0.0) -> np.ndarray:
 @pytest.mark.parametrize('cls', [LongitudinalResonator, TransverseResonator])
 def test_resonator_properties(cls):
     r = cls(F_R, R_SHUNT, 10)
-    assert r.resonant_frequency == F_R
+    assert r.f_r == F_R
     assert r.omega_r == pytest.approx(2 * pi * F_R)
-    assert r.shunt_impedance == R_SHUNT
-    assert r.quality_factor == 10
+    assert r.R == R_SHUNT
+    assert r.Q == 10
     assert r.R_over_Q == pytest.approx(100)
-    assert r.damping_coefficient == pytest.approx(2 * pi * F_R / 20)
-    assert r.reduced_quality_factor == pytest.approx(sqrt(100 - 0.25))
+    assert r.alpha == pytest.approx(2 * pi * F_R / 20)
+    assert r.Q_reduced == pytest.approx(sqrt(100 - 0.25))
+
+
+def test_resonators_of_different_type_are_not_equal():
+    assert LongitudinalResonator(F_R, R_SHUNT, 10) == LongitudinalResonator(F_R, R_SHUNT, 10)
+    assert LongitudinalResonator(F_R, R_SHUNT, 10) != TransverseResonator(F_R, R_SHUNT, 10)
 
 
 @pytest.mark.parametrize('cls', [LongitudinalResonator, TransverseResonator])
-@pytest.mark.parametrize('quality_factor', [0.5, 0.1, -1])
-def test_resonator_rejects_overdamped(cls, quality_factor):
+@pytest.mark.parametrize('Q', [0.5, 0.1, -1])
+def test_resonator_rejects_overdamped(cls, Q):
     with pytest.raises(ValueError):
-        cls(F_R, R_SHUNT, quality_factor)
+        cls(F_R, R_SHUNT, Q)
 
 
-@pytest.mark.parametrize('quality_factor', QUALITY_FACTORS)
-def test_resonator_reduced_omega(quality_factor):
+@pytest.mark.parametrize('Q', QUALITY_FACTORS)
+def test_resonator_reduced_omega(Q):
     # oscillation frequency of the damped oscillator
-    r = LongitudinalResonator(F_R, R_SHUNT, quality_factor)
-    assert r.reduced_omega_r == pytest.approx(sqrt(r.omega_r**2 - r.damping_coefficient**2))
+    r = LongitudinalResonator(F_R, R_SHUNT, Q)
+    assert r.omega_reduced == pytest.approx(sqrt(r.omega_r**2 - r.alpha**2))
 
 
 # --- longitudinal resonator ---
 
 def test_longitudinal_impedance_special_points():
     r = LongitudinalResonator(F_R, R_SHUNT, 10)
-    impedance = r.get_impedance(np.array([0, F_R / 2, F_R, 2 * F_R]))
-    assert impedance[0] == 0
-    assert impedance[2] == pytest.approx(R_SHUNT)
+    z = r.get_impedance(np.array([0, F_R / 2, F_R, 2 * F_R]))
+    assert z[0] == 0
+    assert z[2] == pytest.approx(R_SHUNT)
     # inductive below, capacitive above resonance
-    assert impedance[1].imag > 0
-    assert impedance[3].imag < 0
-    assert impedance[1].real == pytest.approx(impedance[3].real)
+    assert z[1].imag > 0
+    assert z[3].imag < 0
+    assert z[1].real == pytest.approx(z[3].real)
 
 
 def test_longitudinal_impedance_rejects_negative_frequencies():
@@ -74,41 +79,41 @@ def test_longitudinal_impedance_finite_wake_length_converges():
     r = LongitudinalResonator(F_R, R_SHUNT, 1000)
     f = np.linspace(0.99 * F_R, 1.01 * F_R, 201)
     full = r.get_impedance(f)
-    long_wake = r.get_impedance(f, wake_length=100 / r.damping_coefficient)
+    long_wake = r.get_impedance(f, wake_length=100 / r.alpha)
     np.testing.assert_allclose(long_wake, full, atol=1e-3 * R_SHUNT)
 
     # a short wake has not yet built up the full resonance
-    short_wake = r.get_impedance(np.array([F_R]), wake_length=0.1 / r.damping_coefficient)
+    short_wake = r.get_impedance(np.array([F_R]), wake_length=0.1 / r.alpha)
     assert short_wake[0].real < 0.2 * R_SHUNT
 
 
 @pytest.mark.parametrize('cls', [LongitudinalResonator, TransverseResonator])
 def test_wake_function_is_zero_at_negative_tolerance(cls):
     r = cls(F_R, R_SHUNT, 10)
-    wake = r.get_wake_function(np.array([-1e-15, -1e-16]), zero_time_tolerance=1e-15)
-    assert wake[0] == 0
+    w = r.get_wake_function(np.array([-1e-15, -1e-16]), zero_time_tolerance=1e-15)
+    assert w[0] == 0
     if cls is LongitudinalResonator:
-        assert wake[1] == pytest.approx(r.omega_r * r.R_over_Q / 2, rel=1e-6)
+        assert w[1] == pytest.approx(r.omega_r * r.R_over_Q / 2, rel=1e-6)
 
 
 def test_longitudinal_wake_function_causal_and_halved_at_zero():
     r = LongitudinalResonator(F_R, R_SHUNT, 10)
     t = np.array([-1e-9, 0.0, 2e-12])
-    wake = r.get_wake_function(t)
-    assert wake[0] == 0
-    assert wake[1] == pytest.approx(r.omega_r * r.R_over_Q / 2)
-    assert wake[2] == pytest.approx(r.omega_r * r.R_over_Q, rel=2e-3)
+    w = r.get_wake_function(t)
+    assert w[0] == 0
+    assert w[1] == pytest.approx(r.omega_r * r.R_over_Q / 2)
+    assert w[2] == pytest.approx(r.omega_r * r.R_over_Q, rel=2e-3)
 
 
-@pytest.mark.parametrize('quality_factor', QUALITY_FACTORS)
-def test_longitudinal_wake_and_impedance_are_fourier_pair(quality_factor):
-    r = LongitudinalResonator(F_R, R_SHUNT, quality_factor)
+@pytest.mark.parametrize('Q', QUALITY_FACTORS)
+def test_longitudinal_wake_and_impedance_are_fourier_pair(Q):
+    r = LongitudinalResonator(F_R, R_SHUNT, Q)
     t = wake_time_axis(r)
-    wake = r.get_wake_function(t)
-    f, impedance = get_impedance_from_wake(t, wake)
+    w = r.get_wake_function(t)
+    f, z = get_impedance_from_wake(t, w)
     expected = r.get_impedance(f)
     band = (f > 0.1 * F_R) & (f < 5 * F_R)
-    np.testing.assert_allclose(impedance[band], expected[band], atol=1e-4 * R_SHUNT)
+    np.testing.assert_allclose(z[band], expected[band], atol=1e-4 * R_SHUNT)
 
 
 def test_longitudinal_loss_factor_point_charge():
@@ -119,7 +124,7 @@ def test_longitudinal_loss_factor_point_charge():
 def test_longitudinal_loss_factor_warns_for_long_bunches():
     r = LongitudinalResonator(F_R, R_SHUNT, 10)
     with pytest.warns(AccuracyWarning, match='short bunches'):
-        r.get_loss_factor(bunch_length_sigma=1 / r.omega_r)
+        r.get_loss_factor(sigma=1 / r.omega_r)
 
 
 def test_gaussian_loss_factor_time_and_frequency_domain_agree():
@@ -133,8 +138,8 @@ def test_gaussian_loss_factor_time_and_frequency_domain_agree():
     )[0] / pi
 
     t = wake_time_axis(r)
-    wake = r.get_wake_function(t)
-    t_potential, wake_potential = convolve_wake(t, wake, target_bunch_sigma=sigma)
+    w = r.get_wake_function(t)
+    t_potential, wake_potential = convolve_wake(t, w, target_sigma=sigma)
     k_time = GaussianBunch(1, sigma).get_loss_factor(t_potential, wake_potential)
 
     assert k_time == pytest.approx(k_frequency, rel=1e-6)
@@ -147,9 +152,9 @@ def test_gaussian_loss_factor_time_and_frequency_domain_agree():
 
 def test_transverse_impedance_special_points():
     r = TransverseResonator(F_R, R_SHUNT, 10)
-    impedance = r.get_impedance(np.array([0, F_R]))
-    assert impedance[0] == pytest.approx(1j * r.R_over_Q)
-    assert impedance[1] == pytest.approx(R_SHUNT)
+    z = r.get_impedance(np.array([0, F_R]))
+    assert z[0] == pytest.approx(1j * r.R_over_Q)
+    assert z[1] == pytest.approx(R_SHUNT)
 
 
 def test_transverse_impedance_rejects_invalid_input():
@@ -161,20 +166,20 @@ def test_transverse_impedance_rejects_invalid_input():
 
 
 def test_transverse_wake_function_causal_and_zero_at_origin():
-    wake = TransverseResonator(F_R, R_SHUNT, 10).get_wake_function(np.array([-1e-9, 0.0]))
-    np.testing.assert_array_equal(wake, [0, 0])
+    w = TransverseResonator(F_R, R_SHUNT, 10).get_wake_function(np.array([-1e-9, 0.0]))
+    np.testing.assert_array_equal(w, [0, 0])
 
 
-@pytest.mark.parametrize('quality_factor', QUALITY_FACTORS)
-def test_transverse_wake_and_impedance_are_fourier_pair(quality_factor):
+@pytest.mark.parametrize('Q', QUALITY_FACTORS)
+def test_transverse_wake_and_impedance_are_fourier_pair(Q):
     # transverse convention: Z(w) = j * int W(t) exp(-j w t) dt
-    r = TransverseResonator(F_R, R_SHUNT, quality_factor)
+    r = TransverseResonator(F_R, R_SHUNT, Q)
     t = wake_time_axis(r)
-    wake = r.get_wake_function(t)
-    f, impedance = get_impedance_from_wake(t, wake)
+    w = r.get_wake_function(t)
+    f, z = get_impedance_from_wake(t, w)
     expected = r.get_impedance(f)
     band = (f > 0.1 * F_R) & (f < 5 * F_R)
-    np.testing.assert_allclose(1j * impedance[band], expected[band], atol=1e-4 * R_SHUNT)
+    np.testing.assert_allclose(1j * z[band], expected[band], atol=1e-4 * R_SHUNT)
 
 
 # --- wake <-> impedance transforms ---
@@ -212,7 +217,7 @@ def test_impedance_from_wake_potential_normalized_by_bunch_spectrum():
     sigma = 50e-12 # s
     t = wake_time_axis(r)
     wake = r.get_wake_function(t)
-    t_potential, wake_potential = convolve_wake(t, wake, target_bunch_sigma=sigma)
+    t_potential, wake_potential = convolve_wake(t, wake, target_sigma=sigma)
     # cutoff removes frequencies where the bunch spectrum vanishes
     f, impedance = get_impedance_from_wake(
         t_potential, wake_potential, bunch_sigma=sigma, cutoff_by_bunch_sigma=4
@@ -234,7 +239,7 @@ def test_impedance_from_wake_cutoff_by_bunch_sigma(cutoff):
     r = LongitudinalResonator(F_R, R_SHUNT, 50)
     sigma = 50e-12 # s
     t = wake_time_axis(r)
-    t_potential, wake_potential = convolve_wake(t, r.get_wake_function(t), target_bunch_sigma=sigma)
+    t_potential, wake_potential = convolve_wake(t, r.get_wake_function(t), target_sigma=sigma)
     f, impedance = get_impedance_from_wake(
         t_potential, wake_potential, bunch_sigma=sigma, cutoff_by_bunch_sigma=cutoff
     )
@@ -316,7 +321,7 @@ def gaussian_step_response(t: np.ndarray, sigma: float) -> np.ndarray:
 
 def test_convolve_wake_step_gives_error_function():
     t, wake = step_wake()
-    t_conv, w_conv = convolve_wake(t, wake, target_bunch_sigma=3 * STEP_SIGMA)
+    t_conv, w_conv = convolve_wake(t, wake, target_sigma=3 * STEP_SIGMA)
     assert len(t_conv) == len(w_conv)
     np.testing.assert_allclose(np.diff(t_conv), t[1] - t[0])
     # only compare where the convolution is not affected by the finite input window
@@ -328,8 +333,8 @@ def test_convolve_wake_step_gives_error_function():
 
 def test_convolve_wake_from_finite_bunch_length():
     t, wake = step_wake()
-    t1, w1 = convolve_wake(t, wake, target_bunch_sigma=3 * STEP_SIGMA)
-    t2, w2 = convolve_wake(t1, w1, target_bunch_sigma=5 * STEP_SIGMA, wake_bunch_sigma=3 * STEP_SIGMA)
+    t1, w1 = convolve_wake(t, wake, target_sigma=3 * STEP_SIGMA)
+    t2, w2 = convolve_wake(t1, w1, target_sigma=5 * STEP_SIGMA, wake_sigma=3 * STEP_SIGMA)
     window = np.abs(t2) < 20 * STEP_SIGMA
     np.testing.assert_allclose(
         w2[window], gaussian_step_response(t2[window], 5 * STEP_SIGMA), atol=5e-3
@@ -339,12 +344,12 @@ def test_convolve_wake_from_finite_bunch_length():
 def test_convolve_wake_warns_on_coarse_sampling():
     t, wake = step_wake()
     with pytest.warns(AccuracyWarning, match='too coarse'):
-        convolve_wake(t[::40], wake[::40], target_bunch_sigma=2 * STEP_SIGMA)
+        convolve_wake(t[::40], wake[::40], target_sigma=2 * STEP_SIGMA)
 
 
 def test_convolve_wake_rejects_invalid_input():
     t, wake = step_wake()
     with pytest.raises(ValueError):
-        convolve_wake(t, wake, target_bunch_sigma=STEP_SIGMA, wake_bunch_sigma=STEP_SIGMA)
+        convolve_wake(t, wake, target_sigma=STEP_SIGMA, wake_sigma=STEP_SIGMA)
     with pytest.raises(ValueError):
-        convolve_wake(np.array([0.0, 1.0, 3.0]) * DT, np.ones(3), target_bunch_sigma=STEP_SIGMA)
+        convolve_wake(np.array([0.0, 1.0, 3.0]) * DT, np.ones(3), target_sigma=STEP_SIGMA)
