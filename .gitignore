@@ -1,7 +1,5 @@
-.vscode/
-.idea/
-
 examples/
+docs/superpowers/
 
 .venv/
 __pycache__/
@@ -10,7 +8,7 @@ __pycache__/
 *$py.class
 *.egg-info
 
+.vscode/
+.idea/
 .sys.v*/
-
-.DS_Storedocs/superpowers/
 .DS_Store
