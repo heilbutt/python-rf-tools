@@ -139,8 +139,8 @@ def test_gaussian_loss_factor_time_and_frequency_domain_agree():
 
     t = wake_time_axis(r)
     w = r.get_wake_function(t)
-    t_potential, wake_potential = convolve_wake(t, w, target_sigma=sigma)
-    k_time = GaussianBunch(1, sigma).get_loss_factor(t_potential, wake_potential)
+    t_potential, w_potential = convolve_wake(t, w, target_sigma=sigma)
+    k_time = GaussianBunch(1, sigma).get_loss_factor(t_potential, w_potential)
 
     assert k_time == pytest.approx(k_frequency, rel=1e-6)
     # short-bunch approximation is still close, slightly beyond its validity (omega_r * sigma = 0.13)
@@ -193,44 +193,44 @@ def test_impedance_from_wake_rejects_non_equidistant_time():
 def test_impedance_from_wake_is_independent_of_start_time():
     r = LongitudinalResonator(F_R, R_SHUNT, 50)
     t = wake_time_axis(r)
-    wake = r.get_wake_function(t)
+    w = r.get_wake_function(t)
     wake_shifted = r.get_wake_function(t - 1e-9)
-    _, impedance = get_impedance_from_wake(t, wake)
+    _, z = get_impedance_from_wake(t, w)
     _, impedance_shifted = get_impedance_from_wake(t - 1e-9, wake_shifted)
-    np.testing.assert_allclose(impedance_shifted, impedance, atol=1e-6 * R_SHUNT)
+    np.testing.assert_allclose(impedance_shifted, z, atol=1e-6 * R_SHUNT)
 
 
 def test_impedance_from_wake_oversampling_refines_frequency_axis():
     r = LongitudinalResonator(F_R, R_SHUNT, 50)
     t = wake_time_axis(r)
-    wake = r.get_wake_function(t)
-    f1, _ = get_impedance_from_wake(t, wake)
-    f4, impedance = get_impedance_from_wake(t, wake, oversampling_factor=4)
+    w = r.get_wake_function(t)
+    f1, _ = get_impedance_from_wake(t, w)
+    f4, z = get_impedance_from_wake(t, w, oversampling=4)
     assert f4[1] == pytest.approx(f1[1] / 4)
     expected = r.get_impedance(f4)
     band = (f4 > 0.1 * F_R) & (f4 < 5 * F_R)
-    np.testing.assert_allclose(impedance[band], expected[band], atol=1e-4 * R_SHUNT)
+    np.testing.assert_allclose(z[band], expected[band], atol=1e-4 * R_SHUNT)
 
 
 def test_impedance_from_wake_potential_normalized_by_bunch_spectrum():
     r = LongitudinalResonator(F_R, R_SHUNT, 50)
     sigma = 50e-12 # s
     t = wake_time_axis(r)
-    wake = r.get_wake_function(t)
-    t_potential, wake_potential = convolve_wake(t, wake, target_sigma=sigma)
+    w = r.get_wake_function(t)
+    t_potential, w_potential = convolve_wake(t, w, target_sigma=sigma)
     # cutoff removes frequencies where the bunch spectrum vanishes
-    f, impedance = get_impedance_from_wake(
-        t_potential, wake_potential, bunch_sigma=sigma, cutoff_by_bunch_sigma=4
+    f, z = get_impedance_from_wake(
+        t_potential, w_potential, sigma=sigma, cutoff_sigma=4
     )
     expected = r.get_impedance(f)
     band = (f > 0.1 * F_R) & (f < 5 * F_R)
-    np.testing.assert_allclose(impedance[band], expected[band], atol=1e-3 * R_SHUNT)
+    np.testing.assert_allclose(z[band], expected[band], atol=1e-3 * R_SHUNT)
 
 
 def test_impedance_from_wake_cutoff_requires_bunch_sigma():
     t = np.arange(10) * DT
     with pytest.raises(ValueError):
-        get_impedance_from_wake(t, np.ones(10), cutoff_by_bunch_sigma=3)
+        get_impedance_from_wake(t, np.ones(10), cutoff_sigma=3)
 
 
 @pytest.mark.parametrize('cutoff', [2, 4])
@@ -239,46 +239,46 @@ def test_impedance_from_wake_cutoff_by_bunch_sigma(cutoff):
     r = LongitudinalResonator(F_R, R_SHUNT, 50)
     sigma = 50e-12 # s
     t = wake_time_axis(r)
-    t_potential, wake_potential = convolve_wake(t, r.get_wake_function(t), target_sigma=sigma)
-    f, impedance = get_impedance_from_wake(
-        t_potential, wake_potential, bunch_sigma=sigma, cutoff_by_bunch_sigma=cutoff
+    t_potential, w_potential = convolve_wake(t, r.get_wake_function(t), target_sigma=sigma)
+    f, z = get_impedance_from_wake(
+        t_potential, w_potential, sigma=sigma, cutoff_sigma=cutoff
     )
     cutoff_frequency = cutoff / (2 * pi * sigma)
     assert f[-1] <= cutoff_frequency < f[-1] + (f[1] - f[0])
-    assert np.all(np.isfinite(impedance))
+    assert np.all(np.isfinite(z))
 
 
 @pytest.mark.parametrize('num_samples', [1000, 1001])
-@pytest.mark.parametrize('start_time', [0.0, -0.3e-9, 0.2e-9])
-def test_wake_impedance_roundtrip(num_samples, start_time):
+@pytest.mark.parametrize('t_start', [0.0, -0.3e-9, 0.2e-9])
+def test_wake_impedance_roundtrip(num_samples, t_start):
     rng = np.random.default_rng(42)
-    t = start_time + DT * np.arange(num_samples)
-    wake = rng.normal(size=num_samples)
-    f, impedance = get_impedance_from_wake(t, wake)
-    t_back, wake_back = get_wake_from_impedance(f, impedance, start_time=start_time)
+    t = t_start + DT * np.arange(num_samples)
+    w = rng.normal(size=num_samples)
+    f, z = get_impedance_from_wake(t, w)
+    t_back, w_back = get_wake_from_impedance(f, z, t_start=t_start)
     # an odd number of samples is padded with one zero
     np.testing.assert_allclose(t_back[:num_samples], t, rtol=0, atol=1e-6 * DT)
-    np.testing.assert_allclose(wake_back[:num_samples], wake, atol=1e-12)
-    np.testing.assert_allclose(wake_back[num_samples:], 0, atol=1e-12)
+    np.testing.assert_allclose(w_back[:num_samples], w, atol=1e-12)
+    np.testing.assert_allclose(w_back[num_samples:], 0, atol=1e-12)
 
 
 def test_impedance_wake_roundtrip():
     rng = np.random.default_rng(42)
     f = np.arange(501) * 1e6
-    impedance = rng.normal(size=501) + 1j * rng.normal(size=501)
+    z = rng.normal(size=501) + 1j * rng.normal(size=501)
     # DC and Nyquist bins of a real signal are real
-    impedance[[0, -1]] = impedance[[0, -1]].real
-    t, wake = get_wake_from_impedance(f, impedance)
-    f_back, impedance_back = get_impedance_from_wake(t, wake)
+    z[[0, -1]] = z[[0, -1]].real
+    t, w = get_wake_from_impedance(f, z)
+    f_back, impedance_back = get_impedance_from_wake(t, w)
     np.testing.assert_allclose(f_back, f)
-    np.testing.assert_allclose(impedance_back, impedance, atol=1e-12)
+    np.testing.assert_allclose(impedance_back, z, atol=1e-12)
 
 
 def test_wake_from_impedance_oversampling_refines_time_axis():
     f = np.arange(501) * 1e6
-    impedance = LongitudinalResonator(100e6, R_SHUNT, 5).get_impedance(f)
-    t1, _ = get_wake_from_impedance(f, impedance)
-    t4, _ = get_wake_from_impedance(f, impedance, oversampling_factor=4)
+    z = LongitudinalResonator(100e6, R_SHUNT, 5).get_impedance(f)
+    t1, _ = get_wake_from_impedance(f, z)
+    t4, _ = get_wake_from_impedance(f, z, oversampling=4)
     assert len(t4) == 4 * len(t1)
     assert t4[1] == pytest.approx(t1[1] / 4)
 
@@ -286,14 +286,14 @@ def test_wake_from_impedance_oversampling_refines_time_axis():
 def test_wake_from_impedance_matches_resonator_wake():
     r = LongitudinalResonator(F_R, R_SHUNT, 5)
     f = np.arange(0, 200 * F_R, 1e6)
-    impedance = r.get_impedance(f)
-    t, wake = get_wake_from_impedance(f, impedance)
+    z = r.get_impedance(f)
+    t, w = get_wake_from_impedance(f, z)
     assert t[0] == 0
     assert t[1] - t[0] == pytest.approx(1 / (2 * f[-1]))
     expected = r.get_wake_function(t)
     # away from the discontinuity at t = 0
     window = (t > 0.1e-9) & (t < 10e-9)
-    np.testing.assert_allclose(wake[window], expected[window], atol=1e-2 * r.omega_r * r.R_over_Q)
+    np.testing.assert_allclose(w[window], expected[window], atol=1e-2 * r.omega_r * r.R_over_Q)
 
 
 @pytest.mark.parametrize('f', [
@@ -320,8 +320,8 @@ def gaussian_step_response(t: np.ndarray, sigma: float) -> np.ndarray:
 
 
 def test_convolve_wake_step_gives_error_function():
-    t, wake = step_wake()
-    t_conv, w_conv = convolve_wake(t, wake, target_sigma=3 * STEP_SIGMA)
+    t, w = step_wake()
+    t_conv, w_conv = convolve_wake(t, w, target_sigma=3 * STEP_SIGMA)
     assert len(t_conv) == len(w_conv)
     np.testing.assert_allclose(np.diff(t_conv), t[1] - t[0])
     # only compare where the convolution is not affected by the finite input window
@@ -332,8 +332,8 @@ def test_convolve_wake_step_gives_error_function():
 
 
 def test_convolve_wake_from_finite_bunch_length():
-    t, wake = step_wake()
-    t1, w1 = convolve_wake(t, wake, target_sigma=3 * STEP_SIGMA)
+    t, w = step_wake()
+    t1, w1 = convolve_wake(t, w, target_sigma=3 * STEP_SIGMA)
     t2, w2 = convolve_wake(t1, w1, target_sigma=5 * STEP_SIGMA, wake_sigma=3 * STEP_SIGMA)
     window = np.abs(t2) < 20 * STEP_SIGMA
     np.testing.assert_allclose(
@@ -342,14 +342,14 @@ def test_convolve_wake_from_finite_bunch_length():
 
 
 def test_convolve_wake_warns_on_coarse_sampling():
-    t, wake = step_wake()
+    t, w = step_wake()
     with pytest.warns(AccuracyWarning, match='too coarse'):
-        convolve_wake(t[::40], wake[::40], target_sigma=2 * STEP_SIGMA)
+        convolve_wake(t[::40], w[::40], target_sigma=2 * STEP_SIGMA)
 
 
 def test_convolve_wake_rejects_invalid_input():
-    t, wake = step_wake()
+    t, w = step_wake()
     with pytest.raises(ValueError):
-        convolve_wake(t, wake, target_sigma=STEP_SIGMA, wake_sigma=STEP_SIGMA)
+        convolve_wake(t, w, target_sigma=STEP_SIGMA, wake_sigma=STEP_SIGMA)
     with pytest.raises(ValueError):
         convolve_wake(np.array([0.0, 1.0, 3.0]) * DT, np.ones(3), target_sigma=STEP_SIGMA)

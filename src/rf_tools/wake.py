@@ -27,49 +27,49 @@ _MAX_OMEGA_SIGMA_SHORT_BUNCH = 0.1
 def get_impedance_from_wake(
     t: Real1dArray, # s
     w: Real1dArray, # V/C/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
-    oversampling_factor: float = 1,
-    bunch_sigma: float | None = None, # s
-    cutoff_by_bunch_sigma: float | None = None,
+    oversampling: float = 1,
+    sigma: float | None = None, # s
+    cutoff_sigma: float | None = None,
 ) -> tuple[Real1dArray, Complex1dArray]:
 
     dt = _get_uniform_step(t)
 
     # even number of samples, so that `get_wake_from_impedance` is the exact inverse
-    num_samples = 2 * ceil(len(t) * oversampling_factor / 2)
-    frequency_array = np.fft.rfftfreq(num_samples, d=dt) # Hz
+    num_samples = 2 * ceil(len(t) * oversampling / 2)
+    f = np.fft.rfftfreq(num_samples, d=dt) # Hz
 
     # convention: positive wake is decelerating <-> positive impedance
-    impedance_array = np.fft.rfft(w, n=num_samples) * dt # Ohm/m^n
+    z = np.fft.rfft(w, n=num_samples) * dt # Ohm/m^n
 
     # correct for non-zero start time
-    impedance_array *= np.exp(-2j * pi * frequency_array * t[0])
+    z *= np.exp(-2j * pi * f * t[0])
 
     # cutoff before normalization, avoids division by the vanishing bunch spectrum
-    if cutoff_by_bunch_sigma is not None:
-        if bunch_sigma is None:
-            raise ValueError('Cannot cutoff by bunch sigma if `bunch_sigma` is not provided')
+    if cutoff_sigma is not None:
+        if sigma is None:
+            raise ValueError('Cannot cutoff by bunch sigma if `sigma` is not provided')
 
         # in angular frequency, the gaussian bunch spectrum has rms width 1/sigma
-        cutoff_frequency = cutoff_by_bunch_sigma / (2 * pi * bunch_sigma) # Hz
-        mask = frequency_array <= cutoff_frequency
-        frequency_array = frequency_array[mask]
-        impedance_array = impedance_array[mask]
+        f_cutoff = cutoff_sigma / (2 * pi * sigma) # Hz
+        mask = f <= f_cutoff
+        f = f[mask]
+        z = z[mask]
 
     # normalize by bunch spectrum if bunch length is provided
-    if bunch_sigma is not None:
-        impedance_array /= GaussianBunch(charge=1, sigma=bunch_sigma).get_form_factor(frequency_array) # Ohm/m^n
+    if sigma is not None:
+        z /= GaussianBunch(charge=1, sigma=sigma).get_form_factor(f) # Ohm/m^n
 
     return (
-        frequency_array, # Hz
-        impedance_array # Ohm/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
+        f, # Hz
+        z # Ohm/m^n, n=(2p) for longitudinal, n=(2p-1) for transverse
     )
 
 
 def get_wake_from_impedance(
     f: Real1dArray, # Hz
     z: Complex1dArray, # Ohm/m^n
-    oversampling_factor: float = 1,
-    start_time: float = 0, # s
+    oversampling: float = 1,
+    t_start: float = 0, # s
 ) -> tuple[Real1dArray, Real1dArray]:
 
     if not f[0] == 0:
@@ -78,14 +78,14 @@ def get_wake_from_impedance(
     df = _get_uniform_step(f)
 
     # inverse of `get_impedance_from_wake`, which uses an even number of time samples
-    num_samples = 2 * ceil((len(f) - 1) * oversampling_factor)
+    num_samples = 2 * ceil((len(f) - 1) * oversampling)
     dt = 1 / (num_samples * df) # s
-    t = start_time + dt * np.arange(num_samples) # s
+    t = t_start + dt * np.arange(num_samples) # s
 
     # convention: positive wake is decelerating <-> positive impedance
     # undo start time correction of `get_impedance_from_wake`
     w = np.fft.irfft(
-        z * np.exp(2j * pi * f * start_time), n=num_samples
+        z * np.exp(2j * pi * f * t_start), n=num_samples
     ) / dt # V/C/m^n
 
     return (
@@ -111,13 +111,13 @@ def convolve_wake(
         sigma=sqrt(target_sigma**2 - wake_sigma**2)
     )
     bunch._check_sampling(time_step=dt)
-    bunch_time_array = bunch._get_internal_time_array(time_step=dt)
-    bunch_profile = bunch.get_profile(bunch_time_array)
+    t_bunch = bunch._get_internal_time_array(time_step=dt)
+    bunch_profile = bunch.get_profile(t_bunch)
 
     logger.info(f'Convolving wake: input sigma = {wake_sigma*1e9:.2f} ns ({wake_sigma*c*1e3:.2f} mm), output sigma = {target_sigma*1e9:.2f} ns ({target_sigma*c*1e3:.2f} mm)')
 
     w_convolved = fftconvolve(w, bunch_profile, mode='full') * dt
-    t_convolved = t[0] + bunch_time_array[0] + np.arange(len(w_convolved)) * dt
+    t_convolved = t[0] + t_bunch[0] + np.arange(len(w_convolved)) * dt
 
     return (
         t_convolved, # s
