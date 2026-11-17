@@ -42,7 +42,7 @@
 | `nyquist_frequency`, `cutoff_frequency` | `f_nyquist`, `f_cutoff` | beam, wake |
 | `max_impedance_delta_f` | `max_df` | beam |
 | `max_frequency_shift` | `max_shift` | `get_shifted_power_loss` |
-| `power_loss_spectrum`, `power_losses` (locals) | `power_loss` | beam |
+| `power_losses` (local) | `power_loss` | beam (`power_loss_spectrum` is kept, it matches the method name) |
 | `negative_real_impedance_handling` | `on_negative_impedance` | beam |
 | `loss_factor` (local) | `k` | beam |
 | `resonant_frequency` | `f_r` | ctor arg and field |

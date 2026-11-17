@@ -179,7 +179,7 @@ git commit -m "Short names in Bunch classes: t, f, w, dt, df, f_max, mu, full_le
   - `get_spectrum`, `_get_squared_spectrum`: locals `n` (was `harmonic_array`), `f`, `spectrum`; `filling_pattern_spectrum`, `filling_pattern_power`, `squared_spectrum` stay.
   - `get_numeric_spectrum`: locals `t, profile = self.get_profile()`, `dt`, `spectrum`, `f`.
   - `_get_real_impedance_at_beam_frequencies(self, f_beam, f, z, on_negative_impedance) -> Real1dArray`, locals `max_df`, `f_upper` (was the local `max_frequency`; named `f_upper` so it is not confused with the field `self.f_max`), `real_z_at_f_beam`.
-  - `get_power_loss_spectrum(self, f, z, on_negative_impedance: NegativeImpedanceHandling = 'raise')` returns `(f_beam, power_loss)`.
+  - `get_power_loss_spectrum(self, f, z, on_negative_impedance: NegativeImpedanceHandling = 'raise')` returns `(f_beam, power_loss_spectrum)`.
   - `get_power_loss(self, f, z, on_negative_impedance='raise') -> float`.
   - `get_shifted_power_loss(self, f, z, max_shift: float, on_negative_impedance='raise')`, locals `df` (was `frequency_step`), `power_loss` (was `power_losses`).
   - Error message for unknown handling: ``f'Unknown handling of negative impedance real part: `{on_negative_impedance}`'``.

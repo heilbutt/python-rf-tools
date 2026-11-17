@@ -296,14 +296,14 @@ def test_beam_spectrum_lines_at_revolution_harmonics(method):
     assert spectrum[0] == pytest.approx(beam.charge, rel=1e-9)
 
 
-@pytest.mark.parametrize('f_max, max_harmonic', [
+@pytest.mark.parametrize('f_max, n_max', [
     (500e6, 500),
     (500.7e6, 500),
     (499.3e6, 499),
 ])
-def test_beam_spectrum_up_to_max_frequency(f_max, max_harmonic):
+def test_beam_spectrum_up_to_max_frequency(f_max, n_max):
     f, _ = make_beam(f_max=f_max).get_spectrum()
-    assert len(f) == max_harmonic + 1
+    assert len(f) == n_max + 1
 
 
 @pytest.mark.parametrize('bunch', BUNCHES)

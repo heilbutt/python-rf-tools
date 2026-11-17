@@ -537,12 +537,12 @@ class Beam:
             on_negative_impedance=on_negative_impedance
         ) # Ohm
 
-        df = f_beam[1] - f_beam[0]
-        max_step = ceil(max_shift / df)
+        df_beam = f_beam[1] - f_beam[0]
+        max_step = ceil(max_shift / df_beam)
         shift_steps = np.arange(-max_step, max_step + 1)
         num_harmonics = len(squared_beam_spectrum)
 
-        logger.info(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_shift, "Hz")} in steps of {format_quantity(df, "Hz")} ({len(shift_steps)} steps)')
+        logger.info(f'Calculating shifted power losses for frequency shifts +/- {format_quantity(max_shift, "Hz")} in steps of {format_quantity(df_beam, "Hz")} ({len(shift_steps)} steps)')
 
         # impedance shifted by s harmonics is Z[n - s] at harmonic n, zero outside of the array, so the
         # power loss is a cross-correlation: sum_n S[n] Z[n - s], computed for all shifts at once via FFT.
@@ -554,23 +554,23 @@ class Beam:
 
         # positive and negative frequencies contribute equally, except for DC,
         # where the shifted impedance is Z[-s] for s <= 0 and zero otherwise
-        dc_impedance = np.where(
+        real_z_dc = np.where(
             (shift_steps <= 0) & (-shift_steps < num_harmonics),
             real_z_at_f_beam[np.clip(-shift_steps, 0, num_harmonics - 1)],
             0.0
         ) # Ohm
         power_loss = self.revolution_frequency**2 * (
             2 * correlation[shift_steps % fft_length]
-            - squared_beam_spectrum[0] * dc_impedance
+            - squared_beam_spectrum[0] * real_z_dc
         ) # Hz^2 * C^2 * Ohm = W
 
         logger.info('Power loss calculation results:')
-        logger.info(f'  max:    {format_quantity(max(power_loss), "W"):>12} at shift {format_quantity(shift_steps[np.argmax(power_loss)] * df, "Hz"):>12}')
-        logger.info(f'  min:    {format_quantity(min(power_loss), "W"):>12} at shift {format_quantity(shift_steps[np.argmin(power_loss)] * df, "Hz"):>12}')
+        logger.info(f'  max:    {format_quantity(max(power_loss), "W"):>12} at shift {format_quantity(shift_steps[np.argmax(power_loss)] * df_beam, "Hz"):>12}')
+        logger.info(f'  min:    {format_quantity(min(power_loss), "W"):>12} at shift {format_quantity(shift_steps[np.argmin(power_loss)] * df_beam, "Hz"):>12}')
         logger.info(f'  mean:   {format_quantity(float(np.mean(power_loss)), "W"):>12}')
         logger.info(f'  median: {format_quantity(float(np.median(power_loss)), "W"):>12}')
         
         return (
-            df * shift_steps, # Hz
+            df_beam * shift_steps, # Hz
             power_loss # W
         )

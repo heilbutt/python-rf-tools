@@ -1,3 +1,4 @@
+from dataclasses import FrozenInstanceError
 from math import pi, sqrt
 
 import numpy as np
@@ -36,6 +37,8 @@ def test_resonator_properties(cls):
     assert r.R_over_Q == pytest.approx(100)
     assert r.alpha == pytest.approx(2 * pi * F_R / 20)
     assert r.Q_reduced == pytest.approx(sqrt(100 - 0.25))
+    with pytest.raises(FrozenInstanceError):
+        r.Q = 3 # type: ignore[misc]
 
 
 def test_resonators_of_different_type_are_not_equal():
@@ -78,13 +81,13 @@ def test_longitudinal_impedance_rejects_negative_frequencies():
 def test_longitudinal_impedance_finite_wake_length_converges():
     r = LongitudinalResonator(F_R, R_SHUNT, 1000)
     f = np.linspace(0.99 * F_R, 1.01 * F_R, 201)
-    full = r.get_impedance(f)
-    long_wake = r.get_impedance(f, wake_length=100 / r.alpha)
-    np.testing.assert_allclose(long_wake, full, atol=1e-3 * R_SHUNT)
+    z_full = r.get_impedance(f)
+    z_long = r.get_impedance(f, wake_length=100 / r.alpha)
+    np.testing.assert_allclose(z_long, z_full, atol=1e-3 * R_SHUNT)
 
     # a short wake has not yet built up the full resonance
-    short_wake = r.get_impedance(np.array([F_R]), wake_length=0.1 / r.alpha)
-    assert short_wake[0].real < 0.2 * R_SHUNT
+    z_short = r.get_impedance(np.array([F_R]), wake_length=0.1 / r.alpha)
+    assert z_short[0].real < 0.2 * R_SHUNT
 
 
 @pytest.mark.parametrize('cls', [LongitudinalResonator, TransverseResonator])
@@ -194,10 +197,10 @@ def test_impedance_from_wake_is_independent_of_start_time():
     r = LongitudinalResonator(F_R, R_SHUNT, 50)
     t = wake_time_axis(r)
     w = r.get_wake_function(t)
-    wake_shifted = r.get_wake_function(t - 1e-9)
+    w_shifted = r.get_wake_function(t - 1e-9)
     _, z = get_impedance_from_wake(t, w)
-    _, impedance_shifted = get_impedance_from_wake(t - 1e-9, wake_shifted)
-    np.testing.assert_allclose(impedance_shifted, z, atol=1e-6 * R_SHUNT)
+    _, z_shifted = get_impedance_from_wake(t - 1e-9, w_shifted)
+    np.testing.assert_allclose(z_shifted, z, atol=1e-6 * R_SHUNT)
 
 
 def test_impedance_from_wake_oversampling_refines_frequency_axis():
@@ -243,8 +246,8 @@ def test_impedance_from_wake_cutoff_by_bunch_sigma(cutoff):
     f, z = get_impedance_from_wake(
         t_potential, w_potential, sigma=sigma, cutoff_sigma=cutoff
     )
-    cutoff_frequency = cutoff / (2 * pi * sigma)
-    assert f[-1] <= cutoff_frequency < f[-1] + (f[1] - f[0])
+    f_cutoff = cutoff / (2 * pi * sigma)
+    assert f[-1] <= f_cutoff < f[-1] + (f[1] - f[0])
     assert np.all(np.isfinite(z))
 
 
@@ -269,9 +272,9 @@ def test_impedance_wake_roundtrip():
     # DC and Nyquist bins of a real signal are real
     z[[0, -1]] = z[[0, -1]].real
     t, w = get_wake_from_impedance(f, z)
-    f_back, impedance_back = get_impedance_from_wake(t, w)
+    f_back, z_back = get_impedance_from_wake(t, w)
     np.testing.assert_allclose(f_back, f)
-    np.testing.assert_allclose(impedance_back, z, atol=1e-12)
+    np.testing.assert_allclose(z_back, z, atol=1e-12)
 
 
 def test_wake_from_impedance_oversampling_refines_time_axis():
